@@ -4,7 +4,9 @@ import com.demo.upimesh.crypto.ServerKeyHolder;
 import com.demo.upimesh.model.*;
 import com.demo.upimesh.service.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -27,8 +29,6 @@ public class ApiController {
     @Autowired private DemoService demo;
     @Autowired private MeshSimulatorService mesh;
     @Autowired private BridgeIngestionService bridge;
-    @Autowired private AccountRepository accountRepo;
-    @Autowired private TransactionRepository txRepo;
     @Autowired private IdempotencyService idempotency;
 
     // ------------------------------------------------------------------ key
@@ -119,8 +119,12 @@ public class ApiController {
         List<Map<String, Object>> results = new ArrayList<>();
         // Upload them in parallel to actually exercise concurrent idempotency.
         uploads.parallelStream().forEach(up -> {
+            int hopCount = hopCount(up.packet());
             BridgeIngestionService.IngestResult r =
-                    bridge.ingest(up.packet(), up.bridgeNodeId(), 5 - up.packet().getTtl());
+                    bridge.ingest(up.packet(), up.bridgeNodeId(), hopCount);
+            if (r.reason() == null || !r.reason().startsWith("internal_error")) {
+                mesh.drop(up.bridgeNodeId(), up.packet().getPacketId());
+            }
             synchronized (results) {
                 results.add(Map.of(
                         "bridgeNode", up.bridgeNodeId(),
@@ -154,23 +158,24 @@ public class ApiController {
      */
     @PostMapping("/bridge/ingest")
     public ResponseEntity<?> ingest(
-            @RequestBody MeshPacket packet,
+            @jakarta.validation.Valid @RequestBody MeshPacket packet,
             @RequestHeader(value = "X-Bridge-Node-Id", defaultValue = "unknown") String bridgeNodeId,
             @RequestHeader(value = "X-Hop-Count", defaultValue = "0") int hopCount) {
+
+        if (bridgeNodeId == null || !bridgeNodeId.matches("[A-Za-z0-9._:-]{1,64}")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bridge node ID is invalid.");
+        }
+        if (hopCount < 0 || hopCount > 20) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Hop count must be between 0 and 20.");
+        }
 
         BridgeIngestionService.IngestResult r = bridge.ingest(packet, bridgeNodeId, hopCount);
         return ResponseEntity.ok(r);
     }
 
-    // ------------------------------------------------------------- accounts
-
-    @GetMapping("/accounts")
-    public List<Account> listAccounts() {
-        return accountRepo.findAll();
+    private static int hopCount(MeshPacket packet) {
+        int original = packet.getOriginalTtl() != null ? packet.getOriginalTtl() : packet.getTtl();
+        return Math.max(0, original - packet.getTtl());
     }
 
-    @GetMapping("/transactions")
-    public List<Transaction> listTransactions() {
-        return txRepo.findTop20ByOrderByIdDesc();
-    }
 }

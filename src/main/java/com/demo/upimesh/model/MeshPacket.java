@@ -25,6 +25,9 @@ public class MeshPacket {
     @Min(0)
     private int ttl; // Hops remaining; intermediates decrement it
 
+    /** TTL at creation; used by the simulator to report hop count. */
+    private Integer originalTtl;
+
     @NotNull
     private Long createdAt; // epoch millis, when sender created the packet
 
@@ -38,6 +41,9 @@ public class MeshPacket {
 
     public int getTtl() { return ttl; }
     public void setTtl(int ttl) { this.ttl = ttl; }
+
+    public Integer getOriginalTtl() { return originalTtl; }
+    public void setOriginalTtl(Integer originalTtl) { this.originalTtl = originalTtl; }
 
     public Long getCreatedAt() { return createdAt; }
     public void setCreatedAt(Long createdAt) { this.createdAt = createdAt; }

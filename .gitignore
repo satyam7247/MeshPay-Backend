@@ -1,4 +1,4 @@
-target/
+﻿target/
 .mvn/wrapper/maven-wrapper.jar
 *.class
 *.log
@@ -6,3 +6,8 @@ target/
 *.iml
 .vscode/
 .DS_Store
+.env
+.env.*
+!.env.example
+build/
+Thumbs.db

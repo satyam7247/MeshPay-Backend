@@ -1,0 +1,170 @@
+package com.demo.upimesh.service;
+
+import com.demo.upimesh.model.AppUser;
+import com.demo.upimesh.model.AppUserRepository;
+import com.demo.upimesh.model.PasswordChallenge;
+import com.demo.upimesh.model.PasswordChallengeRepository;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.Locale;
+import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class PasswordService {
+    private static final int OTP_TTL_SECONDS=600;
+    private static final int RESET_TTL_SECONDS=600;
+    private static final int MAX_ATTEMPTS=5;
+    private static final int RESEND_SECONDS=60;
+    private static final int IP_WINDOW_SECONDS=900;
+    private static final int MAX_REQUESTS_PER_IP=5;
+    private final AppUserRepository users;
+    private final PasswordChallengeRepository challenges;
+    private final PasswordEncoder encoder;
+    private final SessionTokenService sessions;
+    private final BrevoEmailService email;
+    private final SecureRandom random=new SecureRandom();
+
+    public PasswordService(AppUserRepository users, PasswordChallengeRepository challenges,
+                           PasswordEncoder encoder, SessionTokenService sessions, BrevoEmailService email) {
+        this.users=users; this.challenges=challenges; this.encoder=encoder; this.sessions=sessions; this.email=email;
+    }
+
+    @Transactional
+    public void changeWithCurrentPassword(AppUser user, String currentPassword, String newPassword) {
+        validateNewPassword(newPassword);
+        if (!encoder.matches(currentPassword == null ? "" : currentPassword,user.getPasswordHash())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Current password is incorrect.");
+        }
+        if (encoder.matches(newPassword,user.getPasswordHash())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"New password must differ from your current password.");
+        }
+        user.changePasswordHash(encoder.encode(newPassword));
+        sessions.revokeAllForUser(user.getId().toString());
+    }
+
+    @Transactional
+    public ChallengeResponse requestForgotOtp(String emailAddress, String requesterAddress) {
+        return issueOtp(emailAddress,requesterAddress,PasswordChallenge.Purpose.FORGOT,null,true);
+    }
+
+    @Transactional
+    public ChallengeResponse requestChangeOtp(AppUser user, String requesterAddress) {
+        return issueOtp(user.getEmail(),requesterAddress,PasswordChallenge.Purpose.CHANGE,user,false);
+    }
+
+    private ChallengeResponse issueOtp(String emailAddress, String requesterAddress, PasswordChallenge.Purpose purpose, AppUser requiredUser,
+                                       boolean hideAccountExistence) {
+        // A global configuration check returns the same result for known and unknown addresses.
+        if(!email.isConfigured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Password email delivery is not configured on the backend.");
+        }
+        String normalized=emailAddress.trim().toLowerCase(Locale.ROOT);
+        String emailKey=sha256(normalized);
+        Instant now=Instant.now();
+        String requesterKey=sha256(requesterAddress==null?"unknown":requesterAddress);
+        if (challenges.countByRequesterKeyAndCreatedAtAfter(requesterKey,now.minusSeconds(IP_WINDOW_SECONDS))>=MAX_REQUESTS_PER_IP) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,"Too many verification requests. Try again later.");
+        }
+        PasswordChallenge latest=challenges.findFirstByEmailKeyAndPurposeOrderByCreatedAtDesc(emailKey,purpose).orElse(null);
+        if (latest!=null && latest.getCreatedAt().isAfter(now.minusSeconds(RESEND_SECONDS))) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,"Please wait before requesting another code.");
+        }
+        AppUser user=requiredUser;
+        if (user==null) user=users.findByEmailIgnoreCase(normalized).orElse(null);
+        if (requiredUser!=null && !requiredUser.getEmail().equalsIgnoreCase(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Password recovery could not be started.");
+        }
+        String otp=String.format(Locale.ROOT,"%06d",random.nextInt(1_000_000));
+        PasswordChallenge challenge=challenges.save(new PasswordChallenge(
+                user==null?null:user.getId().toString(),emailKey,requesterKey,purpose,encoder.encode(otp),
+                now.plusSeconds(OTP_TTL_SECONDS),now));
+        if (user!=null) {
+            try { email.sendPasswordOtp(user.getEmail(),otp); }
+            catch (BrevoEmailService.EmailDeliveryUnavailableException failure) {
+                challenge.invalidate();
+                if (!hideAccountExistence) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Email delivery is unavailable. Try again later.");
+            }
+        }
+        return new ChallengeResponse(challenge.getId().toString(),
+                hideAccountExistence ? "If an account exists, recovery email may be sent. This response does not confirm account existence or delivery." : "A verification request was accepted by the configured email provider.",
+                OTP_TTL_SECONDS,RESEND_SECONDS);
+    }
+
+    @Transactional(noRollbackFor=ResponseStatusException.class)
+    public ResetAuthorization verifyOtp(String challengeId, String code) {
+        PasswordChallenge challenge=lockChallenge(challengeId);
+        ensureLatest(challenge);
+        if (challenge.getUserId()==null || challenge.isOtpConsumed() || challenge.getOtpExpiresAt()==null
+                || challenge.getOtpExpiresAt().isBefore(Instant.now()) || challenge.getAttempts()>=MAX_ATTEMPTS) {
+            throw invalidOtp();
+        }
+        if (code==null || !encoder.matches(code,challenge.getOtpHash())) {
+            challenge.recordWrongAttempt();
+            throw invalidOtp();
+        }
+        byte[] bytes=new byte[32]; random.nextBytes(bytes);
+        String token=Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        challenge.consumeOtp(sha256(token),Instant.now().plusSeconds(RESET_TTL_SECONDS));
+        return new ResetAuthorization(token,RESET_TTL_SECONDS);
+    }
+
+    @Transactional
+    public void resetPassword(String challengeId, String resetToken, String newPassword) {
+        validateNewPassword(newPassword);
+        PasswordChallenge challenge=lockChallenge(challengeId);
+        ensureLatest(challenge);
+        if (challenge.getUserId()==null || challenge.isResetConsumed() || challenge.getResetTokenHash()==null
+                || challenge.getResetExpiresAt()==null || challenge.getResetExpiresAt().isBefore(Instant.now())
+                || resetToken==null || !MessageDigest.isEqual(challenge.getResetTokenHash().getBytes(StandardCharsets.US_ASCII),sha256(resetToken).getBytes(StandardCharsets.US_ASCII))) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Password reset authorization is invalid or expired.");
+        }
+        AppUser user=users.findById(UUID.fromString(challenge.getUserId()))
+                .orElseThrow(()->new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Password reset authorization is invalid or expired."));
+        if (encoder.matches(newPassword,user.getPasswordHash())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"New password must differ from your current password.");
+        }
+        user.changePasswordHash(encoder.encode(newPassword));
+        challenge.consumeReset();
+        sessions.revokeAllForUser(user.getId().toString());
+    }
+
+    private PasswordChallenge lockChallenge(String rawId) {
+        try {
+            return challenges.findByIdForUpdate(UUID.fromString(rawId))
+                    .orElseThrow(()->new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Verification code is invalid or expired."));
+        } catch (IllegalArgumentException invalidUuid) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Verification code is invalid or expired.");
+        }
+    }
+
+    private void ensureLatest(PasswordChallenge challenge) {
+        PasswordChallenge latest=challenges.findFirstByEmailKeyAndPurposeOrderByCreatedAtDesc(challenge.getEmailKey(),challenge.getPurpose()).orElse(null);
+        if (latest==null || !latest.getId().equals(challenge.getId())) throw invalidOtp();
+    }
+    private ResponseStatusException invalidOtp(){return new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Verification code is invalid or expired.");}
+
+    private void validateNewPassword(String password) {
+        if (password==null || password.getBytes(StandardCharsets.UTF_8).length>72 || password.length()<8
+                || !password.matches(".*[A-Z].*") || !password.matches(".*[a-z].*")
+                || !password.matches(".*[0-9].*") || !password.matches(".*[^A-Za-z0-9].*")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Password must be 8-72 UTF-8 bytes and include uppercase, lowercase, a number, and a special character.");
+        }
+    }
+    private String sha256(String value) {
+        try {return Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}
+        catch (Exception error) {throw new IllegalStateException("Secure hashing is unavailable.");}
+    }
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay=3600000)
+    @Transactional
+    public void removeExpiredChallenges(){challenges.deleteAllByExpiresAtBefore(Instant.now());}
+    public record ChallengeResponse(String challengeId,String message,int expiresInSeconds,int resendAfterSeconds){}
+    public record ResetAuthorization(String resetToken,int expiresInSeconds){}
+}

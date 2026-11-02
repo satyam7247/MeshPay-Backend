@@ -42,6 +42,10 @@ public class VirtualDevice {
         return heldPackets.size();
     }
 
+    public void drop(String packetId) {
+        heldPackets.remove(packetId);
+    }
+
     public void clear() {
         heldPackets.clear();
     }

@@ -53,6 +53,9 @@ public class MeshSimulatorService {
     public void inject(String senderDeviceId, MeshPacket packet) {
         VirtualDevice sender = devices.get(senderDeviceId);
         if (sender == null) throw new IllegalArgumentException("Unknown device: " + senderDeviceId);
+        if (packet.getOriginalTtl() == null) {
+            packet.setOriginalTtl(packet.getTtl());
+        }
         sender.hold(packet);
         log.info("Packet {} injected at {} (TTL={})",
                 packet.getPacketId().substring(0, 8), senderDeviceId, packet.getTtl());
@@ -87,6 +90,7 @@ public class MeshSimulatorService {
                     MeshPacket copy = new MeshPacket();
                     copy.setPacketId(pkt.getPacketId());
                     copy.setTtl(pkt.getTtl() - 1);
+                    copy.setOriginalTtl(pkt.getOriginalTtl() != null ? pkt.getOriginalTtl() : pkt.getTtl());
                     copy.setCreatedAt(pkt.getCreatedAt());
                     copy.setCiphertext(pkt.getCiphertext());
                     dst.hold(copy);
@@ -120,6 +124,13 @@ public class MeshSimulatorService {
             }
         }
         return out;
+    }
+
+    public void drop(String deviceId, String packetId) {
+        VirtualDevice device = devices.get(deviceId);
+        if (device != null) {
+            device.drop(packetId);
+        }
     }
 
     public void resetMesh() {

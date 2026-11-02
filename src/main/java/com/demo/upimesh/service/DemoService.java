@@ -10,10 +10,12 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -31,13 +33,18 @@ public class DemoService {
     @Autowired private HybridCryptoService crypto;
     @Autowired private ServerKeyHolder serverKey;
 
+    @Value("${upi.mesh.demo.seed-accounts:false}")
+    private boolean seedDemoAccounts;
+
     @PostConstruct
     public void seedAccounts() {
+        if (!seedDemoAccounts) return;
         if (accounts.count() == 0) {
-            accounts.save(new Account("alice@demo", "Alice",   new BigDecimal("5000.00")));
-            accounts.save(new Account("bob@demo",   "Bob",     new BigDecimal("1000.00")));
-            accounts.save(new Account("carol@demo", "Carol",   new BigDecimal("2500.00")));
-            accounts.save(new Account("dave@demo",  "Dave",    new BigDecimal("500.00")));
+            String demoPinHash = sha256HexUnchecked("1234");
+            accounts.save(new Account("alice@demo", "Alice",   new BigDecimal("5000.00"), demoPinHash));
+            accounts.save(new Account("bob@demo",   "Bob",     new BigDecimal("1000.00"), demoPinHash));
+            accounts.save(new Account("carol@demo", "Carol",   new BigDecimal("2500.00"), demoPinHash));
+            accounts.save(new Account("dave@demo",  "Dave",    new BigDecimal("500.00"), demoPinHash));
             log.info("Seeded 4 demo accounts");
         }
     }
@@ -54,6 +61,24 @@ public class DemoService {
      */
     public MeshPacket createPacket(String senderVpa, String receiverVpa,
                                    BigDecimal amount, String pin, int ttl) throws Exception {
+        if (senderVpa == null || senderVpa.isBlank() || receiverVpa == null || receiverVpa.isBlank()) {
+            throw new IllegalArgumentException("Sender and receiver VPAs are required.");
+        }
+        if (senderVpa.equalsIgnoreCase(receiverVpa)) {
+            throw new IllegalArgumentException("Sender and receiver must be different.");
+        }
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException("Amount must be positive.");
+        }
+        if (amount.scale() > 2) {
+            throw new IllegalArgumentException("Amount cannot have more than 2 decimal places.");
+        }
+        if (pin == null || pin.isBlank()) {
+            throw new IllegalArgumentException("Simulator PIN input is required.");
+        }
+        if (ttl < 0 || ttl > 20) {
+            throw new IllegalArgumentException("TTL must be between 0 and 20.");
+        }
         PaymentInstruction instruction = new PaymentInstruction(
                 senderVpa,
                 receiverVpa,
@@ -68,14 +93,23 @@ public class DemoService {
         MeshPacket packet = new MeshPacket();
         packet.setPacketId(UUID.randomUUID().toString());
         packet.setTtl(ttl);
+        packet.setOriginalTtl(ttl);
         packet.setCreatedAt(Instant.now().toEpochMilli());
         packet.setCiphertext(ciphertext);
         return packet;
     }
 
+    private String sha256HexUnchecked(String input) {
+        try {
+            return sha256Hex(input);
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
     private String sha256Hex(String input) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
-        byte[] hash = md.digest(input.getBytes());
+        byte[] hash = md.digest(input.getBytes(StandardCharsets.UTF_8));
         StringBuilder hex = new StringBuilder();
         for (byte b : hash) hex.append(String.format("%02x", b));
         return hex.toString();

@@ -12,7 +12,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-
 import java.math.BigDecimal;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -108,4 +107,25 @@ class IdempotencyConcurrencyTest {
         assertEquals(0, original.getAmount().compareTo(decrypted.getAmount()));
         assertEquals(original.getNonce(), decrypted.getNonce());
     }
+
+    @Test
+    void insufficientBalanceIsRejectedNotSettled() throws Exception {
+        MeshPacket packet = demoService.createPacket(
+                "dave@demo", "alice@demo", new BigDecimal("5000.00"), "1234", 5);
+
+        BridgeIngestionService.IngestResult r = bridge.ingest(packet, "bridge-x", 1);
+        assertEquals("REJECTED", r.outcome());
+        assertNotNull(r.transactionId());
+    }
+
+    @Test
+    void wrongPinIsRejected() throws Exception {
+        MeshPacket packet = demoService.createPacket(
+                "alice@demo", "bob@demo", new BigDecimal("10.00"), "9999", 5);
+
+        BridgeIngestionService.IngestResult r = bridge.ingest(packet, "bridge-x", 1);
+        assertEquals("REJECTED", r.outcome());
+    }
 }
+
+

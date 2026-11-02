@@ -1,0 +1,143 @@
+package com.demo.upimesh.service;
+
+import com.demo.upimesh.dto.BankAccountDtos.BankAccountResponse;
+import com.demo.upimesh.dto.BankAccountDtos.LinkBankAccountRequest;
+import com.demo.upimesh.dto.BankAccountDtos.VerifyBankAccountRequest;
+import com.demo.upimesh.model.BankAccount;
+import com.demo.upimesh.model.BankAccountRepository;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+@Service
+public class BankAccountService {
+    private static final Set<String> SUPPORTED_BANKS = Set.of(
+            "State Bank of India", "HDFC Bank", "ICICI Bank", "Axis Bank",
+            "Punjab National Bank", "Bank of Baroda", "Kotak Mahindra Bank",
+            "Canara Bank", "Union Bank of India", "Bank of India",
+            "Indian Bank", "Indian Overseas Bank", "Central Bank of India",
+            "UCO Bank", "IDBI Bank", "IDFC FIRST Bank", "Federal Bank",
+            "IndusInd Bank", "Yes Bank", "RBL Bank", "South Indian Bank",
+            "Bandhan Bank", "AU Small Finance Bank");
+
+    private final BankAccountRepository accounts;
+    private final BankOtpService otp;
+    private final BankVerificationService verification;
+    private final BankDataEncryptionService encryption;
+
+    public BankAccountService(BankAccountRepository accounts, BankOtpService otp,
+                              BankVerificationService verification,
+                              BankDataEncryptionService encryption) {
+        this.accounts = accounts;
+        this.otp = otp;
+        this.verification = verification;
+        this.encryption = encryption;
+    }
+
+    @Transactional(readOnly = true)
+    public List<BankAccountResponse> list(UUID userId) {
+        if (!encryption.isConfigured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Bank account details are unavailable until the data encryption key is configured.");
+        }
+        return accounts.findAllByOwnerUserIdOrderByCreatedAtDesc(userId).stream()
+                .filter(account -> !"MOCK_SIMULATED".equals(account.getVerificationMode()))
+                .filter(account -> encryption.isEncrypted(account.getAccountHolderName()))
+                .map(this::toResponse)
+                .toList();
+    }
+
+    @Transactional
+    public BankAccountResponse link(UUID userId, LinkBankAccountRequest request) {
+        verification.requireConfigured();
+        String holder = request.accountHolderName().trim();
+        String bank = supportedBank(request.bankName());
+        if (!request.accountNumber().matches("[0-9]{9,18}")
+                || !request.confirmAccountNumber().matches("[0-9]{9,18}")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Account numbers must contain 9 to 18 digits.");
+        }
+        if (!request.accountNumber().equals(request.confirmAccountNumber())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Account numbers do not match.");
+        }
+        if (holder.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Account holder name is required.");
+        }
+        otp.consumeVerified(userId, request.challengeId());
+        BankAccount account = accounts.save(new BankAccount(userId, bank, encryption.encrypt(holder),
+                mask(request.accountNumber())));
+        return toResponse(account);
+    }
+
+    @Transactional
+    public BankAccountResponse verify(UUID userId, VerifyBankAccountRequest request) {
+        verification.requireConfigured();
+        if (!request.accountNumber().matches("[0-9]{9,18}")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Account number must contain 9 to 18 digits.");
+        }
+        BankAccount account = accounts.findByIdAndOwnerUserId(request.accountId(), userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Bank account was not found."));
+        if (!account.getVerificationStatus().equals("PENDING")) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This bank account has already been checked.");
+        }
+        if (!encryption.isEncrypted(account.getAccountHolderName())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This legacy account must be removed and linked again before verification.");
+        }
+        if (!account.getMaskedAccountNumber().endsWith(request.accountNumber()
+                .substring(request.accountNumber().length() - 4))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Account number does not match the linked account.");
+        }
+        BankVerificationService.VerificationResult result = verification.verify(
+                encryption.decrypt(account.getAccountHolderName()),
+                request.accountNumber(), request.ifsc());
+        account.updateVerificationResult(result.status(), result.verificationMode(),
+                result.message(), result.providerReference(),
+                result.verifiedAccountHolderName() == null ? null
+                        : encryption.encrypt(result.verifiedAccountHolderName()),
+                result.verifiedBankName());
+        return toResponse(account);
+    }
+
+    @Transactional
+    public void remove(UUID userId, UUID accountId) {
+        if (accounts.deleteByIdAndOwnerUserId(accountId, userId) == 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Bank account was not found.");
+        }
+    }
+
+    private static String mask(String accountNumber) {
+        return "X".repeat(Math.max(0, accountNumber.length() - 4))
+                + accountNumber.substring(accountNumber.length() - 4);
+    }
+
+    private static String supportedBank(String requestedName) {
+        String normalized = requestedName.trim();
+        if (!normalized.matches("[A-Za-z0-9 .&()/-]{2,100}")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Enter a valid supported bank name.");
+        }
+        return SUPPORTED_BANKS.stream()
+                .filter(name -> name.equalsIgnoreCase(normalized))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Enter a valid supported bank name."));
+    }
+
+    private BankAccountResponse toResponse(BankAccount account) {
+        return new BankAccountResponse(account.getId(), account.getBankName(),
+                encryption.decrypt(account.getAccountHolderName()), account.getMaskedAccountNumber(),
+                account.getVerificationStatus(), account.getVerificationMode(),
+                account.getVerificationMessage(), account.getProviderReference(),
+                account.getCreatedAt(), account.getUpdatedAt());
+    }
+}
