@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +23,9 @@ public class ApiExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, String>> status(ResponseStatusException error) {
         String message = error.getReason() == null ? "Request failed." : error.getReason();
-        return ResponseEntity.status(error.getStatusCode()).body(Map.of("message", message));
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(error.getStatusCode());
+        if (error.getStatusCode().value() == 429) response.header("Retry-After", "900");
+        return response.body(Map.of("message", message));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -40,6 +43,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, String>> conflict(DataIntegrityViolationException error) {
+        log.error("Database integrity constraint rejected request.", error.getMostSpecificCause());
         String details = error.getMostSpecificCause().getMessage();
         String message = details != null && (details.contains("uk_app_users_email") || details.contains("uk_app_users_phone"))
                 ? "An account already uses that email or phone number."
@@ -61,6 +65,13 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, String>> unexpected(Exception error) {
+        if (error instanceof ErrorResponse frameworkError) {
+            HttpStatus status = HttpStatus.valueOf(frameworkError.getStatusCode().value());
+            String message = status == HttpStatus.METHOD_NOT_ALLOWED ? "Method not allowed."
+                    : status == HttpStatus.UNSUPPORTED_MEDIA_TYPE ? "Unsupported request content type."
+                    : "Request is invalid.";
+            return ResponseEntity.status(frameworkError.getStatusCode()).body(Map.of("message", message));
+        }
         log.error("Unhandled API request failure.", error);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("message", "The request could not be completed. Please try again."));

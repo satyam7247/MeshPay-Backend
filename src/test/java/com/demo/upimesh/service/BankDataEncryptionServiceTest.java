@@ -37,4 +37,13 @@ class BankDataEncryptionServiceTest {
         assertFalse(new BankDataEncryptionService(
                 Base64.getEncoder().encodeToString(new byte[16])).isConfigured());
     }
+
+    @Test void fingerprintIsStableAndDistinguishesFullAccountNumbers() {
+        BankDataEncryptionService encryption = new BankDataEncryptionService(
+                java.util.Base64.getEncoder().encodeToString(new byte[32]));
+        String first = encryption.fingerprint("1234567890123456");
+        assertEquals(first, encryption.fingerprint("1234567890123456"));
+        assertEquals(64, first.length());
+        assertNotEquals(first, encryption.fingerprint("999956"));
+    }
 }

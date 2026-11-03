@@ -31,4 +31,5 @@ public class AccountDeletionRequest {
     public Instant getRequestCreatedAt(){return requestCreatedAt;} public Instant getScheduledDeletionAt(){return scheduledDeletionAt;}
     public Status getStatus(){return status;} public Instant getCancelledAt(){return cancelledAt;} public Instant getDeletedAt(){return deletedAt;}
     public boolean wasAccountLocked(){return priorAccountLocked;} public String getDeletedEmailKey(){return deletedEmailKey;}
+    public void migrateDeletedEmailKey(String key){this.deletedEmailKey=key;}
 }

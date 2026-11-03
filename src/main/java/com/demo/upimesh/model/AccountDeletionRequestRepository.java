@@ -17,6 +17,8 @@ public interface AccountDeletionRequestRepository extends JpaRepository<AccountD
     @Lock(LockModeType.PESSIMISTIC_WRITE) @Query("select r from AccountDeletionRequest r where r.id=:id")
     Optional<AccountDeletionRequest> findByIdForUpdate(@Param("id") UUID id);
     boolean existsByDeletedEmailKey(String emailKey);
+    List<AccountDeletionRequest> findAllByDeletedEmailKey(String emailKey);
+    boolean existsByUserIdAndStatus(UUID userId, AccountDeletionRequest.Status status);
 }
 
 

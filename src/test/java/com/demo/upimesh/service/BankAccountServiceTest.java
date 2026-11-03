@@ -56,7 +56,7 @@ class BankAccountServiceTest {
     }
 
     @Test
-    void hidesLegacySimulatedAccountsFromUserResponses() {
+    void listsLegacySimulatedAccountsAlongsideEncryptedAccounts() {
         BankAccountRepository repository = mock(BankAccountRepository.class);
         BankDataEncryptionService encryption = encryption();
         BankAccountService service = service(repository, mock(BankOtpService.class), encryption);
@@ -70,10 +70,12 @@ class BankAccountServiceTest {
 
         var result = service.list(ownerId);
 
-        assertEquals(1, result.size());
-        assertEquals("PROVIDER_PENDING", result.get(0).verificationMode());
-        assertEquals("XXXXXXXX9876", result.get(0).maskedAccountNumber());
+        assertEquals(2, result.size());
+        assertEquals("MOCK_SIMULATED", result.get(0).verificationMode());
         assertEquals("Example User", result.get(0).accountHolderName());
+        assertEquals("PROVIDER_PENDING", result.get(1).verificationMode());
+        assertEquals("XXXXXXXX9876", result.get(1).maskedAccountNumber());
+        assertEquals("Example User", result.get(1).accountHolderName());
     }
 
     @Test

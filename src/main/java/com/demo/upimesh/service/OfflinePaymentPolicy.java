@@ -2,6 +2,8 @@ package com.demo.upimesh.service;
 
 import com.demo.upimesh.model.AppUser;
 import com.demo.upimesh.model.AppUserRepository;
+import com.demo.upimesh.model.AccountDeletionRequest;
+import com.demo.upimesh.model.AccountDeletionRequestRepository;
 import com.demo.upimesh.model.Transaction;
 import com.demo.upimesh.model.TransactionRepository;
 import org.springframework.stereotype.Service;
@@ -13,10 +15,13 @@ import java.time.Instant;
 public class OfflinePaymentPolicy {
     private final AppUserRepository users;
     private final TransactionRepository transactions;
+    private final AccountDeletionRequestRepository deletionRequests;
 
-    public OfflinePaymentPolicy(AppUserRepository users, TransactionRepository transactions) {
+    public OfflinePaymentPolicy(AppUserRepository users, TransactionRepository transactions,
+                                AccountDeletionRequestRepository deletionRequests) {
         this.users = users;
         this.transactions = transactions;
+        this.deletionRequests = deletionRequests;
     }
 
     /** Called from the settlement transaction while the account row is locked. */
@@ -34,6 +39,16 @@ public class OfflinePaymentPolicy {
         if (used == null) used = BigDecimal.ZERO;
         if (used.add(amount).compareTo(limit) > 0) return "offline_spending_allowance_exceeded";
         return null;
+    }
+
+    public String receiverRejectionReason(String receiverVpa) {
+        AppUser receiver = users.findByUpiId(receiverVpa).orElse(null);
+        if (receiver == null) return null; // Simulator-only accounts have no app-user record.
+        boolean pendingDeletion = deletionRequests.existsByUserIdAndStatus(
+                receiver.getId(), AccountDeletionRequest.Status.PENDING_DELETION);
+        boolean deleted = deletionRequests.existsByUserIdAndStatus(
+                receiver.getId(), AccountDeletionRequest.Status.DELETED);
+        return receiver.isAccountLocked() || pendingDeletion || deleted ? "receiver_unavailable" : null;
     }
 
     public Allowance allowance(AppUser user) {

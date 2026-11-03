@@ -9,11 +9,18 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * Where the actual ledger update happens. Wrapped in a DB transaction so either
@@ -29,6 +36,13 @@ import java.time.Instant;
 public class SettlementService {
 
     private static final Logger log = LoggerFactory.getLogger(SettlementService.class);
+    private static final int MAX_FAILED_PIN_ATTEMPTS = 5;
+    private static final Duration PIN_LOCK_DURATION = Duration.ofMinutes(15);
+    private static final Set<String> SEEDED_DEMO_VPAS = Set.of(
+            "alice@demo", "bob@demo", "carol@demo", "dave@demo");
+
+    @Value("${upi.mesh.demo.seed-accounts:false}")
+    private boolean demoSeedEnabled;
 
     @Autowired private AccountRepository accounts;
     @Autowired private TransactionRepository transactions;
@@ -45,7 +59,7 @@ public class SettlementService {
         }
         if (instruction.getSenderVpa().equalsIgnoreCase(instruction.getReceiverVpa())) {
             log.warn("Rejected self-transfer for {}", instruction.getSenderVpa());
-            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount);
+            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, "self_transfer");
         }
 
         if (instruction.getNonce() == null || instruction.getNonce().isBlank()
@@ -56,13 +70,9 @@ public class SettlementService {
             throw new DuplicateTransactionException();
         }
 
-        Account sender = accounts.findById(instruction.getSenderVpa())
+        Account sender = accounts.findByIdForUpdate(instruction.getSenderVpa())
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown sender VPA: " + instruction.getSenderVpa()));
-
-        Account receiver = accounts.findById(instruction.getReceiverVpa())
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Unknown receiver VPA: " + instruction.getReceiverVpa()));
 
         BigDecimal amount = instruction.getAmount();
         if (amount == null || amount.signum() <= 0) {
@@ -76,19 +86,58 @@ public class SettlementService {
         String policyRejection = offlinePaymentPolicy.rejectionReason(instruction.getSenderVpa(), amount);
         if (policyRejection != null) {
             log.warn("Offline payment rejected by account policy: {}", policyRejection);
-            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount);
+            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, policyRejection);
         }
 
-        if (sender.getPinHash() != null && !sender.getPinHash().isBlank()
-                && !sender.getPinHash().equals(instruction.getPinHash())) {
-            log.warn("PIN mismatch for {}", sender.getVpa());
-            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount);
+        String configuredPinHash = sender.getPinHash();
+        boolean demoCredentialException = demoSeedEnabled
+                && SEEDED_DEMO_VPAS.contains(sender.getVpa().toLowerCase(Locale.ROOT));
+        if (configuredPinHash == null || configuredPinHash.isBlank()) {
+            // TODO(sender-auth): evaluate device-bound signatures for offline sender authentication.
+            if (!demoCredentialException) {
+                return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, "credential_not_configured");
+            }
+        } else {
+            Instant now = Instant.now();
+            if (sender.getPinLockedUntil() != null && sender.getPinLockedUntil().isAfter(now)) {
+                // An active lock does not create another ledger row for each submitted guess.
+                return rejectedWithoutPersistence(instruction, packetHash, bridgeNodeId, hopCount, "pin_attempts_locked");
+            }
+            boolean expiredLock = sender.getPinLockedUntil() != null;
+            if (expiredLock) {
+                sender.setPinLockedUntil(null);
+                sender.setPinFailedAttempts(0);
+            }
+            if (!constantTimePinHashMatches(configuredPinHash, instruction.getPinHash())) {
+                int failures = Math.min(sender.getPinFailedAttempts() + 1, MAX_FAILED_PIN_ATTEMPTS);
+                sender.setPinFailedAttempts(failures);
+                if (failures == MAX_FAILED_PIN_ATTEMPTS) {
+                    sender.setPinLockedUntil(now.plus(PIN_LOCK_DURATION));
+                }
+                accounts.save(sender);
+                log.warn("Offline payment credential verification failed for sender {}.", sender.getVpa());
+                return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, "invalid_credential");
+            }
+            if (sender.getPinFailedAttempts() != 0 || expiredLock) {
+                sender.setPinFailedAttempts(0);
+                sender.setPinLockedUntil(null);
+                accounts.save(sender);
+            }
+        }
+
+        String receiverRejection = offlinePaymentPolicy.receiverRejectionReason(instruction.getReceiverVpa());
+        if (receiverRejection != null) {
+            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, receiverRejection);
+        }
+        Account receiver = accounts.findById(instruction.getReceiverVpa()).orElse(null);
+        if (receiver == null) {
+            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, "receiver_unavailable");
         }
 
         if (sender.getBalance().compareTo(amount) < 0) {
             log.warn("Insufficient balance: {} has ₹{}, tried to send ₹{}",
                     sender.getVpa(), sender.getBalance(), amount);
-            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount);
+            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, "insufficient_balance");
         }
 
         sender.setBalance(sender.getBalance().subtract(amount));
@@ -118,7 +167,17 @@ public class SettlementService {
     }
 
     private Transaction recordRejected(PaymentInstruction instruction, String packetHash,
-                                       String bridgeNodeId, int hopCount) {
+                                       String bridgeNodeId, int hopCount, String reason) {
+        return rejectedTransaction(instruction, packetHash, bridgeNodeId, hopCount, reason, true);
+    }
+
+    private Transaction rejectedWithoutPersistence(PaymentInstruction instruction, String packetHash,
+                                                   String bridgeNodeId, int hopCount, String reason) {
+        return rejectedTransaction(instruction, packetHash, bridgeNodeId, hopCount, reason, false);
+    }
+
+    private Transaction rejectedTransaction(PaymentInstruction instruction, String packetHash,
+                                            String bridgeNodeId, int hopCount, String reason, boolean persist) {
         Transaction tx = new Transaction();
         tx.setPacketHash(packetHash);
         tx.setTransactionNonce(instruction.getNonce());
@@ -130,7 +189,16 @@ public class SettlementService {
         tx.setBridgeNodeId(bridgeNodeId);
         tx.setHopCount(hopCount);
         tx.setStatus(Transaction.Status.REJECTED);
-        return transactions.save(tx);
+        tx.setRejectionReason(reason);
+        return persist ? transactions.save(tx) : tx;
+    }
+
+    private static boolean constantTimePinHashMatches(String expected, String candidate) {
+        byte[] expectedBytes = expected.getBytes(StandardCharsets.US_ASCII);
+        byte[] candidateBytes = (candidate == null ? "" : candidate).getBytes(StandardCharsets.US_ASCII);
+        boolean sameLength = expectedBytes.length == candidateBytes.length;
+        boolean equal = MessageDigest.isEqual(expectedBytes, Arrays.copyOf(candidateBytes, expectedBytes.length));
+        return sameLength && equal;
     }
 
     public static class DuplicateTransactionException extends RuntimeException {

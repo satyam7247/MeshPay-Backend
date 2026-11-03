@@ -31,14 +31,16 @@ public class ExpoPushService {
             Map<String,Object> message=new LinkedHashMap<>();
             message.put("to",target.token());
             message.put("title","Payment received");
-            message.put("body",details.item().senderName()+" sent you INR "+details.item().amount().toPlainString()+".");
+            message.put("body",details.hideTransactionDetails() ? "You received a payment. Open MeshPay to view it."
+                    : details.item().senderName()+" sent you INR "+details.item().amount().toPlainString()+".");
             message.put("sound",target.soundEnabled()?"default":null);
             message.put("badge",(int)Math.min(Integer.MAX_VALUE,details.unreadCount()));
             message.put("priority","high");
             message.put("channelId","payments");
             message.put("collapseId","payment-"+details.item().id());
-            message.put("data",Map.of("notificationId",details.item().id().toString(),
-                    "transactionId",details.item().transactionId()));
+            message.put("data",details.hideTransactionDetails()
+                    ? Map.of("notificationId",details.item().id().toString())
+                    : Map.of("notificationId",details.item().id().toString(),"transactionId",details.item().transactionId()));
             messages.add(message);
         }
         for(int start=0;start<messages.size();start+=100) sendBatch(messages.subList(start,Math.min(start+100,messages.size())));

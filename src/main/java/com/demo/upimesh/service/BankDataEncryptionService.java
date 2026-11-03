@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Cipher;
+import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
@@ -24,6 +25,17 @@ public class BankDataEncryptionService {
     public BankDataEncryptionService(
             @Value("${app.bank-data.encryption-key:}") String encodedKey) {
         this.key = parseKey(encodedKey);
+    }
+
+    public String fingerprint(String value) {
+        requireConfigured();
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(key.getEncoded(), "HmacSHA256"));
+            return java.util.HexFormat.of().formatHex(mac.doFinal(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (GeneralSecurityException error) {
+            throw new IllegalStateException("Bank data fingerprinting is unavailable.", error);
+        }
     }
 
     public boolean isConfigured() {

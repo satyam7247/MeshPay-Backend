@@ -18,22 +18,23 @@ import jakarta.servlet.http.HttpServletRequest;
 @RequestMapping("/api/password")
 public class PasswordController {
     private final PasswordService passwords;
-    public PasswordController(PasswordService passwords){this.passwords=passwords;}
+    private final com.demo.upimesh.service.ClientIpResolver clientIps;
+    public PasswordController(PasswordService passwords, com.demo.upimesh.service.ClientIpResolver clientIps){this.passwords=passwords;this.clientIps=clientIps;}
 
     @PostMapping("/change")
-    public Map<String,String> change(@Valid @RequestBody ChangeRequest request, Authentication auth) {
-        passwords.changeWithCurrentPassword((AppUser)auth.getPrincipal(),request.currentPassword(),request.newPassword());
+    public Map<String,String> change(@Valid @RequestBody ChangeRequest request, Authentication auth, HttpServletRequest httpRequest) {
+        passwords.changeWithCurrentPassword((AppUser)auth.getPrincipal(),request.currentPassword(),request.newPassword(),clientIps.resolve(httpRequest));
         return Map.of("status","password_changed","message","Password updated. Please log in again on this device.");
     }
 
     @PostMapping("/change/request-otp")
     public PasswordService.ChallengeResponse requestChangeOtp(Authentication auth, HttpServletRequest request) {
-        return passwords.requestChangeOtp((AppUser)auth.getPrincipal(),request.getRemoteAddr());
+        return passwords.requestChangeOtp((AppUser)auth.getPrincipal(),clientIps.resolve(request));
     }
 
     @PostMapping("/forgot/request")
     public PasswordService.ChallengeResponse requestForgotOtp(@Valid @RequestBody ForgotRequest request, HttpServletRequest httpRequest) {
-        return passwords.requestForgotOtp(request.email(),httpRequest.getRemoteAddr());
+        return passwords.requestForgotOtp(request.email(),clientIps.resolve(httpRequest));
     }
 
     @PostMapping("/otp/verify")

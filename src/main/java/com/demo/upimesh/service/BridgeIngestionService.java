@@ -106,7 +106,7 @@ public class BridgeIngestionService {
             return IngestResult.invalid(packetHash, "transaction_integrity_rejected");
         } catch (IllegalArgumentException e) {
             log.warn("Ingestion rejected packet {}: {}", shortHash(packetHash), e.getMessage());
-            return IngestResult.invalid(packetHash, e.getMessage());
+            return IngestResult.invalid(packetHash, "invalid_instruction");
         } catch (Exception e) {
             if (claimed) {
                 idempotency.release(packetHash);
@@ -126,7 +126,8 @@ public class BridgeIngestionService {
             return new IngestResult("SETTLED", hash, null, tx.getId());
         }
         public static IngestResult rejected(String hash, Transaction tx) {
-            return new IngestResult("REJECTED", hash, "settlement_rejected", tx.getId());
+            String reason = tx.getRejectionReason() == null ? "settlement_rejected" : tx.getRejectionReason();
+            return new IngestResult("REJECTED", hash, reason, tx.getId());
         }
         public static IngestResult duplicate(String hash) {
             return new IngestResult("DUPLICATE_DROPPED", hash, null, null);

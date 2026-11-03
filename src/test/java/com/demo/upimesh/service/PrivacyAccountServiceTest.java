@@ -34,7 +34,7 @@ class PrivacyAccountServiceTest {
         transactions = mock(TransactionRepository.class);
         passwords = mock(PasswordEncoder.class);
         deletionRequests = mock(com.demo.upimesh.model.AccountDeletionRequestRepository.class);
-        OfflinePaymentPolicy policy = new OfflinePaymentPolicy(users, transactions);
+        OfflinePaymentPolicy policy = new OfflinePaymentPolicy(users, transactions, deletionRequests);
         service = new PrivacyAccountService(users, transactions, passwords, policy, deletionRequests);
         user = new AppUser("Test User", "test@example.com", "+919876543210", "hashed-password", "test@meshpay");
         ReflectionTestUtils.setField(user, "id", UUID.randomUUID());
@@ -48,8 +48,9 @@ class PrivacyAccountServiceTest {
 
     @Test
     void persistsConfiguredLimitAndPrivacyFlagsOnTheAccountEntity() {
+        when(passwords.matches("correct-password", "hashed-password")).thenReturn(true);
         var response = service.update(user, new PrivacyAccountService.UpdateRequest(
-                new BigDecimal("750.50"), true, true));
+                new BigDecimal("750.50"), true, true, "correct-password"));
         assertEquals(new BigDecimal("750.50"), response.offlinePaymentLimit());
         assertTrue(response.hideBalance());
         assertTrue(response.hideTransactionDetails());
@@ -86,6 +87,14 @@ class PrivacyAccountServiceTest {
         assertNull(result.receiverVpa());
         assertNull(result.amount());
         assertNull(result.bridgeNodeId());
+    }
+
+    @Test void raisingOfflineLimitRequiresPasswordReauthentication() {
+        assertThrows(ResponseStatusException.class, () -> service.update(user,
+                new PrivacyAccountService.UpdateRequest(new BigDecimal("100.00"), false, false)));
+        when(passwords.matches("correct-password", "hashed-password")).thenReturn(true);
+        assertDoesNotThrow(() -> service.update(user,
+                new PrivacyAccountService.UpdateRequest(new BigDecimal("100.00"), false, false, "correct-password")));
     }
 }
 

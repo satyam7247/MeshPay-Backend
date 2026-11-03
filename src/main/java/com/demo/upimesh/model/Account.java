@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 
 /**
  * Simulated bank account. In a real system this would live in the bank's core,
@@ -26,6 +27,12 @@ public class Account {
     @JsonIgnore
     @Column(length = 64)
     private String pinHash;
+
+    @Column(name = "pin_failed_attempts", nullable = false, columnDefinition = "integer default 0")
+    private int pinFailedAttempts;
+
+    @Column(name = "pin_locked_until")
+    private Instant pinLockedUntil;
 
     @Version  // Optimistic locking — prevents lost updates on concurrent transfers
     private Long version;
@@ -54,6 +61,10 @@ public class Account {
 
     public String getPinHash() { return pinHash; }
     public void setPinHash(String pinHash) { this.pinHash = pinHash; }
+    public int getPinFailedAttempts() { return pinFailedAttempts; }
+    public void setPinFailedAttempts(int attempts) { this.pinFailedAttempts = Math.max(0, attempts); }
+    public Instant getPinLockedUntil() { return pinLockedUntil; }
+    public void setPinLockedUntil(Instant lockedUntil) { this.pinLockedUntil = lockedUntil; }
 
     public Long getVersion() { return version; }
     public void setVersion(Long version) { this.version = version; }

@@ -3,6 +3,8 @@ package com.demo.upimesh.controller;
 import com.demo.upimesh.model.AppUser;
 import com.demo.upimesh.service.AuthService;
 import com.demo.upimesh.service.SessionTokenService;
+import com.demo.upimesh.service.ClientIpResolver;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -23,10 +25,12 @@ import org.springframework.web.server.ResponseStatusException;
 public class AuthController {
     private final AuthService auth;
     private final SessionTokenService tokens;
+    private final ClientIpResolver clientIps;
 
-    public AuthController(AuthService auth, SessionTokenService tokens) {
+    public AuthController(AuthService auth, SessionTokenService tokens, ClientIpResolver clientIps) {
         this.auth = auth;
         this.tokens = tokens;
+        this.clientIps = clientIps;
     }
 
     @PostMapping("/signup")
@@ -36,8 +40,8 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public AuthService.AuthResponse login(@Valid @RequestBody LoginRequest request) {
-        return auth.login(request.email(), request.password(), request.deviceId(), request.deviceName(), request.platform());
+    public AuthService.AuthResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest) {
+        return auth.login(request.email(), request.password(), request.deviceId(), request.deviceName(), request.platform(), clientIps.resolve(httpRequest));
     }
 
     @GetMapping("/me")

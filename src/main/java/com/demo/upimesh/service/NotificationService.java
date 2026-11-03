@@ -94,7 +94,7 @@ public class NotificationService {
         List<PushTarget> targets=pushTokens.findAllByOwnerUserIdAndEnabledTrue(ownerId).stream()
                 .map(token->new PushTarget(token.getExpoPushToken(),token.isSoundEnabled())).toList();
         return new DeliveryDetails(recipient.getEmail(),NotificationDtos.Item.from(notification),
-                notifications.countByRecipientUserIdAndReadAtIsNull(ownerId),targets);
+                notifications.countByRecipientUserIdAndReadAtIsNull(ownerId),targets,recipient.isHideTransactionDetails());
     }
 
     private UserNotification owned(UUID owner,UUID id) {
@@ -103,5 +103,5 @@ public class NotificationService {
     }
 
     public record PushTarget(String token,boolean soundEnabled) {}
-    public record DeliveryDetails(String recipientEmail,NotificationDtos.Item item,long unreadCount,List<PushTarget> pushTargets) {}
+    public record DeliveryDetails(String recipientEmail,NotificationDtos.Item item,long unreadCount,List<PushTarget> pushTargets,boolean hideTransactionDetails) {}
 }

@@ -29,8 +29,13 @@ public class NotificationDeliveryService {
             if(details==null) return;
             NotificationDtos.Item item=details.item();
             try {
-                email.sendPaymentReceived(details.recipientEmail(),item.senderName(),item.amount(),
-                        item.transactionId(),DateTimeFormatter.ISO_INSTANT.format(item.createdAt()),item.paymentStatus());
+                if (details.hideTransactionDetails()) {
+                    email.sendPaymentReceivedGeneric(details.recipientEmail(),
+                            DateTimeFormatter.ISO_INSTANT.format(item.createdAt()));
+                } else {
+                    email.sendPaymentReceived(details.recipientEmail(),item.senderName(),item.amount(),
+                            item.transactionId(),DateTimeFormatter.ISO_INSTANT.format(item.createdAt()),item.paymentStatus());
+                }
             } catch(Exception failure) {
                 log.warn("Payment notification email could not be sent ({}).",failure.getClass().getSimpleName());
             }

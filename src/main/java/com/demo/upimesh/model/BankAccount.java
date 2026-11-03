@@ -7,6 +7,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -14,7 +15,7 @@ import java.util.UUID;
 @Entity
 @Table(name = "linked_bank_accounts", indexes = {
         @Index(name = "idx_linked_bank_accounts_owner", columnList = "owner_user_id")
-})
+}, uniqueConstraints = @UniqueConstraint(name = "uk_linked_bank_owner_fingerprint", columnNames = {"owner_user_id", "account_fingerprint"}))
 public class BankAccount {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -31,6 +32,12 @@ public class BankAccount {
 
     @Column(name = "masked_account_number", nullable = false, length = 20)
     private String maskedAccountNumber;
+
+    @Column(name = "account_fingerprint", length = 64)
+    private String accountFingerprint;
+
+    @Column(name = "verify_attempts", nullable = false, columnDefinition = "integer default 0")
+    private int verifyAttempts = 0;
 
     @Column(name = "verification_status", nullable = false, length = 16)
     private String verificationStatus;
@@ -54,14 +61,27 @@ public class BankAccount {
 
     public BankAccount(UUID ownerUserId, String bankName, String accountHolderName,
                        String maskedAccountNumber) {
+        this(ownerUserId, bankName, accountHolderName, maskedAccountNumber, null);
+    }
+
+    public BankAccount(UUID ownerUserId, String bankName, String accountHolderName,
+                       String maskedAccountNumber, String accountFingerprint) {
         this.ownerUserId = ownerUserId;
         this.bankName = bankName;
         this.accountHolderName = accountHolderName;
         this.maskedAccountNumber = maskedAccountNumber;
+        this.accountFingerprint = accountFingerprint;
         this.verificationStatus = "PENDING";
         this.verificationMode = "PROVIDER_PENDING";
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
+    }
+
+    public boolean recordVerifyAttempt(int maximum) {
+        if (verifyAttempts >= maximum) return false;
+        verifyAttempts++;
+        updatedAt = Instant.now();
+        return true;
     }
 
     public void updateVerificationResult(String status, String mode, String message,
@@ -86,6 +106,8 @@ public class BankAccount {
     public String getAccountHolderName() { return accountHolderName; }
     public String getMaskedAccountNumber() { return maskedAccountNumber; }
     public String getVerificationStatus() { return verificationStatus; }
+    public String getAccountFingerprint() { return accountFingerprint; }
+    public int getVerifyAttempts() { return verifyAttempts; }
     public String getVerificationMode() { return verificationMode; }
     public String getVerificationMessage() { return verificationMessage; }
     public String getProviderReference() { return providerReference; }

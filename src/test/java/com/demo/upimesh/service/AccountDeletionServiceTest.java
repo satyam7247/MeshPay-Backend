@@ -212,7 +212,7 @@ class AccountDeletionServiceTest {
         assertEquals("PENDING_DELETION",response.status());
         assertEquals(72*60*60L,response.scheduledDeletionAt().getEpochSecond()-response.requestCreatedAt().getEpochSecond());
         assertTrue(user.isAccountLocked());
-        verify(sessions,never()).revokeAllForUser(anyString());
+        verify(sessions).revokeAllForUser(user.getId().toString());
     }
 
     @Test void loginDuringGracePeriodCancelsDeletionAndRestoresAccountLockState() {
@@ -243,13 +243,14 @@ class AccountDeletionServiceTest {
         verify(notificationPushTokens).deleteAllByOwnerUserId(user.getId());
         verify(transactions,never()).delete(any());
     }
-    @Test void unresolvedRecordedTransactionPreventsDeletion() {
+    @Test void remainingLedgerBalancePreventsDeletion() {
         UUID challengeId=UUID.randomUUID();
         AccountDeletionOtpChallenge challenge=new AccountDeletionOtpChallenge(user.getId(),Instant.now());
         ReflectionTestUtils.setField(challenge,"id",challengeId);
         when(challenges.findOwnedForUpdate(challengeId,user.getId())).thenReturn(Optional.of(challenge));
         when(sms.verifyCode(anyString(),anyString())).thenReturn(true);
-        when(transactions.existsBySenderVpaAndStatusNotIn(anyString(),anyList())).thenReturn(true);
+        when(ledger.findById(user.getUpiId())).thenReturn(Optional.of(
+                new Account(user.getUpiId(), user.getName(), new java.math.BigDecimal("0.01"))));
         ResponseStatusException error=assertThrows(ResponseStatusException.class,
                 ()->service.verifyAndRequest(user,challengeId,"123456"));
         assertEquals(HttpStatus.CONFLICT,error.getStatusCode());

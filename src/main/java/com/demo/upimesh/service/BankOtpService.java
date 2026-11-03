@@ -177,8 +177,10 @@ public class BankOtpService {
     @Transactional(noRollbackFor = ResponseStatusException.class)
     public void consumeVerified(UUID userId, UUID challengeId) {
         BankOtpChallenge challenge = getCurrentChallenge(userId, challengeId);
-        if (!challenge.isVerified()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "Verify the registered mobile number before linking an account.");
+        Instant verifiedAt = challenge.getVerifiedAt();
+        if (!challenge.isVerified() || verifiedAt == null || verifiedAt.isBefore(Instant.now().minusSeconds(600)))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Verify the registered mobile number within the last 10 minutes before linking an account.");
         challenge.consume(); challenges.save(challenge);
     }
 

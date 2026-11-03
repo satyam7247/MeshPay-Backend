@@ -5,6 +5,7 @@ import com.demo.upimesh.model.AccountRepository;
 import com.demo.upimesh.model.AppUser;
 import com.demo.upimesh.model.AppUserRepository;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -24,16 +25,25 @@ public class AuthService {
     private final SessionTokenService tokens;
     private final TrustedDeviceService trustedDevices;
     private final AccountDeletionService deletion;
+    private final AttemptRateLimiter limiter;
+    private static final String DUMMY_HASH = "$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
 
+    @Autowired
     public AuthService(AppUserRepository users, AccountRepository accounts,
                        PasswordEncoder passwords, SessionTokenService tokens,
-                       TrustedDeviceService trustedDevices, AccountDeletionService deletion) {
+                       TrustedDeviceService trustedDevices, AccountDeletionService deletion, AttemptRateLimiter limiter) {
         this.users = users;
         this.accounts = accounts;
         this.passwords = passwords;
         this.tokens = tokens;
         this.trustedDevices = trustedDevices;
         this.deletion = deletion;
+        this.limiter = limiter;
+    }
+
+    public AuthService(AppUserRepository users, AccountRepository accounts, PasswordEncoder passwords,
+                       SessionTokenService tokens, TrustedDeviceService trustedDevices, AccountDeletionService deletion) {
+        this(users, accounts, passwords, tokens, trustedDevices, deletion, new AttemptRateLimiter());
     }
 
     @Transactional
@@ -47,9 +57,7 @@ public class AuthService {
         String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
         String normalizedPhone = phone.trim();
         String phoneLookupKey = MobileNumberNormalizer.normalizeStored(normalizedPhone);
-        if (password.getBytes(StandardCharsets.UTF_8).length > 72) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be at most 72 UTF-8 bytes.");
-        }
+        PasswordPolicy.requireValid(password);
         if (users.findByEmailIgnoreCase(normalizedEmail).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "An account with this email already exists.");
         }
@@ -73,14 +81,26 @@ public class AuthService {
 
     @Transactional
     public AuthResponse login(String email, String password, String deviceId, String deviceName, String platform) {
-        AppUser user = users.findByEmailIgnoreCase(email.trim()).orElse(null);
+        return login(email, password, deviceId, deviceName, platform, "unknown");
+    }
+
+    @Transactional
+    public AuthResponse login(String email, String password, String deviceId, String deviceName, String platform, String remoteAddress) {
+        String normalized = email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
+        String emailKey = "login:email:" + normalized;
+        String ipKey = "login:ip:" + (remoteAddress == null ? "unknown" : remoteAddress);
+        limiter.check(emailKey, 5, 900); limiter.check(ipKey, 5, 900);
+        AppUser user = users.findByEmailIgnoreCase(normalized).orElse(null);
+        boolean valid = passwords.matches(password == null ? "" : password,
+                user == null ? DUMMY_HASH : user.getPasswordHash());
+        String deletedMessage = user == null ? deletion.messageForDeletedEmail(normalized) : null;
         if (user == null) {
-            String deletedMessage = deletion.messageForDeletedEmail(email);
+            limiter.check("login-deleted:ip:" + (remoteAddress == null ? "unknown" : remoteAddress), 5, 900);
             if (deletedMessage != null) throw new ResponseStatusException(HttpStatus.GONE, deletedMessage);
-        }
-        if (user == null || !passwords.matches(password, user.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Email or password is incorrect.");
         }
+        if (!valid) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Email or password is incorrect.");
+        limiter.clear(emailKey); limiter.clear(ipKey);
         boolean deletionCancelled = deletion.cancelForLogin(user.getId());
         return issueSession(user, deviceId, deviceName, platform, false, deletionCancelled);
     }
@@ -121,8 +141,14 @@ public class AuthService {
                 user.getPhone(), user.getUpiId());
     }
 
-    public boolean verifyCurrentPassword(AppUser user, String password) {
-        return password != null && passwords.matches(password, user.getPasswordHash());
+    public boolean verifyCurrentPassword(AppUser user, String password) { return verifyCurrentPassword(user,password,"unknown"); }
+    public boolean verifyCurrentPassword(AppUser user, String password, String remoteAddress) {
+        String ip=remoteAddress==null?"unknown":remoteAddress;
+        limiter.check("device-register:user:"+user.getId(),5,900);
+        limiter.check("device-register:ip:"+ip,5,900);
+        boolean valid=password!=null && passwords.matches(password,user.getPasswordHash());
+        if(valid) { limiter.clear("device-register:user:"+user.getId()); limiter.clear("device-register:ip:"+ip); }
+        return valid;
     }
 
     private String createUpiId(String email) {

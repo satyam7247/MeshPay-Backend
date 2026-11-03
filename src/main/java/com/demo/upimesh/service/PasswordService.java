@@ -19,7 +19,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class PasswordService {
-    private static final int OTP_TTL_SECONDS=600;
+    private static final int OTP_TTL_SECONDS=300;
     private static final int RESET_TTL_SECONDS=600;
     private static final int MAX_ATTEMPTS=5;
     private static final int RESEND_SECONDS=60;
@@ -31,6 +31,7 @@ public class PasswordService {
     private final SessionTokenService sessions;
     private final BrevoEmailService email;
     private final SecureRandom random=new SecureRandom();
+    private final AttemptRateLimiter attempts=new AttemptRateLimiter();
 
     public PasswordService(AppUserRepository users, PasswordChallengeRepository challenges,
                            PasswordEncoder encoder, SessionTokenService sessions, BrevoEmailService email) {
@@ -39,13 +40,22 @@ public class PasswordService {
 
     @Transactional
     public void changeWithCurrentPassword(AppUser user, String currentPassword, String newPassword) {
-        validateNewPassword(newPassword);
+        changeWithCurrentPassword(user,currentPassword,newPassword,"unknown");
+    }
+
+    @Transactional
+    public void changeWithCurrentPassword(AppUser user, String currentPassword, String newPassword, String ip) {
+        PasswordPolicy.requireValid(newPassword);
+        attempts.check("password-change:user:"+user.getId(),5,900);
+        attempts.check("password-change:ip:"+(ip==null?"unknown":ip),5,900);
         if (!encoder.matches(currentPassword == null ? "" : currentPassword,user.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Current password is incorrect.");
         }
         if (encoder.matches(newPassword,user.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"New password must differ from your current password.");
         }
+        attempts.clear("password-change:user:"+user.getId());
+        attempts.clear("password-change:ip:"+(ip==null?"unknown":ip));
         user.changePasswordHash(encoder.encode(newPassword));
         sessions.revokeAllForUser(user.getId().toString());
     }
@@ -118,7 +128,7 @@ public class PasswordService {
 
     @Transactional
     public void resetPassword(String challengeId, String resetToken, String newPassword) {
-        validateNewPassword(newPassword);
+        PasswordPolicy.requireValid(newPassword);
         PasswordChallenge challenge=lockChallenge(challengeId);
         ensureLatest(challenge);
         if (challenge.getUserId()==null || challenge.isResetConsumed() || challenge.getResetTokenHash()==null
@@ -151,13 +161,6 @@ public class PasswordService {
     }
     private ResponseStatusException invalidOtp(){return new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Verification code is invalid or expired.");}
 
-    private void validateNewPassword(String password) {
-        if (password==null || password.getBytes(StandardCharsets.UTF_8).length>72 || password.length()<8
-                || !password.matches(".*[A-Z].*") || !password.matches(".*[a-z].*")
-                || !password.matches(".*[0-9].*") || !password.matches(".*[^A-Za-z0-9].*")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Password must be 8-72 UTF-8 bytes and include uppercase, lowercase, a number, and a special character.");
-        }
-    }
     private String sha256(String value) {
         try {return Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}
         catch (Exception error) {throw new IllegalStateException("Secure hashing is unavailable.");}

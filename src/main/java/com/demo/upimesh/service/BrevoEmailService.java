@@ -33,7 +33,7 @@ public class BrevoEmailService {
             throw new EmailDeliveryUnavailableException();
         }
         String html="<p>Your Offline UPI Mesh verification code is <strong>"+otp+"</strong>.</p>"
-                +"<p>This code expires in 10 minutes and can be used once. If you did not request a password change, "
+                +"<p>This code expires in 5 minutes and can be used once. If you did not request a password change, "
                 +"secure your account and ignore this email.</p>";
         Map<String,Object> message=Map.of(
                 "sender",Map.of("email",senderEmail,"name",senderName),
@@ -128,18 +128,10 @@ public class BrevoEmailService {
     }
 
 
-    public void sendPaymentReceived(String email, String senderName, java.math.BigDecimal amount,
+    public void sendPaymentReceived(String email, String payerName, java.math.BigDecimal amount,
                                     Long transactionId, String dateTime, String status) {
         if (!isConfigured()) throw new EmailDeliveryUnavailableException();
-        String safeName=escapeHtml(senderName);
-        String html="<p><strong>"+safeName+"</strong> sent you <strong>"+String.valueOf((char)0x20B9)+" "+amount.toPlainString()+"</strong></p>"
-                +"<p>Transaction ID: "+transactionId+"<br>Date and time: "+escapeHtml(dateTime)
-                +"<br>Payment status: "+escapeHtml(status)+"</p>";
-        Map<String,Object> message=Map.of(
-                "sender",Map.of("email",senderEmail,"name",senderName),
-                "to",java.util.List.of(Map.of("email",email)),
-                "subject","Payment received",
-                "htmlContent",html);
+        Map<String,Object> message=paymentReceivedMessage(email,payerName,amount,transactionId,dateTime,status);
         try {
             String payload=json.writeValueAsString(message);
             HttpRequest request=HttpRequest.newBuilder(URI.create("https://api.brevo.com/v3/smtp/email"))
@@ -160,6 +152,44 @@ public class BrevoEmailService {
             log.warn("Brevo payment notification email request was interrupted.");
             throw new EmailDeliveryUnavailableException();
         }
+    }
+
+
+    public void sendPaymentReceivedGeneric(String email, String dateTime) {
+        if (!isConfigured()) throw new EmailDeliveryUnavailableException();
+        Map<String,Object> message=Map.of("sender",Map.of("email",senderEmail,"name",senderName),
+                "to",java.util.List.of(Map.of("email",email)),"subject","Payment received",
+                "htmlContent","<p>You received a payment. Open MeshPay to view the details.</p><p>Date and time: "+escapeHtml(dateTime)+"</p>");
+        sendMessage(message,"payment notification");
+    }
+
+    private void sendMessage(Map<String,Object> message, String label) {
+        try {
+            String payload=json.writeValueAsString(message);
+            HttpRequest request=HttpRequest.newBuilder(URI.create("https://api.brevo.com/v3/smtp/email"))
+                    .timeout(Duration.ofSeconds(10)).header("api-key",apiKey)
+                    .header("Accept","application/json").header("Content-Type","application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload,StandardCharsets.UTF_8)).build();
+            HttpResponse<Void> response=http.send(request,HttpResponse.BodyHandlers.discarding());
+            if(response.statusCode()<200||response.statusCode()>=300) throw new EmailDeliveryUnavailableException();
+        } catch(IOException error) { throw new EmailDeliveryUnavailableException(); }
+        catch(InterruptedException error) { Thread.currentThread().interrupt(); throw new EmailDeliveryUnavailableException(); }
+    }
+
+    Map<String,Object> paymentReceivedMessage(String email,String payerName,java.math.BigDecimal amount,
+                                              Long transactionId,String dateTime,String status) {
+        String safeName=escapeHtml(limitCodePoints(payerName,80));
+        String html="<p><strong>"+safeName+"</strong> sent you <strong>"+String.valueOf((char)0x20B9)+" "+amount.toPlainString()+"</strong></p>"
+                +"<p>Transaction ID: "+transactionId+"<br>Date and time: "+escapeHtml(dateTime)
+                +"<br>Payment status: "+escapeHtml(status)+"</p>";
+        return Map.of("sender",Map.of("email",senderEmail,"name",this.senderName),
+                "to",java.util.List.of(Map.of("email",email)),"subject","Payment received","htmlContent",html);
+    }
+
+    private static String limitCodePoints(String value,int limit) {
+        if(value==null)return "";
+        int count=value.codePointCount(0,value.length());
+        return count<=limit?value:value.substring(0,value.offsetByCodePoints(0,limit));
     }
 
     private static String escapeHtml(String value) {

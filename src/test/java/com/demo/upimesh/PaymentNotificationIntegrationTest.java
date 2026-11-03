@@ -44,12 +44,13 @@ class PaymentNotificationIntegrationTest {
         AppUser recipient=new AppUser("Mohit","recipient"+suffix+"@example.test","8"+phone.substring(1),"test-hash",recipientVpa);
         users.saveAndFlush(sender);
         users.saveAndFlush(recipient);
-        accounts.saveAndFlush(new Account(senderVpa,"Satyam Sahu",new BigDecimal("200.00")));
+        String senderPinHash="f".repeat(64);
+        accounts.saveAndFlush(new Account(senderVpa,"Satyam Sahu",new BigDecimal("200.00"),senderPinHash));
         accounts.saveAndFlush(new Account(recipientVpa,"Mohit",new BigDecimal("10.00")));
 
         String nonce=UUID.randomUUID().toString();
         var transaction=settlement.settle(new PaymentInstruction(senderVpa,recipientVpa,
-                new BigDecimal("100.00"),null,nonce,System.currentTimeMillis()),
+                new BigDecimal("100.00"),senderPinHash,nonce,System.currentTimeMillis()),
                 UUID.randomUUID().toString().replace("-","")+UUID.randomUUID().toString().replace("-","") ,"test-bridge",1);
         assertEquals(com.demo.upimesh.model.Transaction.Status.SETTLED,transaction.getStatus());
 

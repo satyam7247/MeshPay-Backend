@@ -26,7 +26,7 @@ public class AccountDeletionService {
     private static final Logger log=LoggerFactory.getLogger(AccountDeletionService.class);
     private static final int MAX_ATTEMPTS=5;
     private static final SecureRandom RANDOM=new SecureRandom();
-    private static final String PENDING_MESSAGE="Your account cannot be deleted right now because some payments are still pending. Please wait until all pending payments are completed or resolved, then try again.";
+    private static final String PENDING_MESSAGE="Your account cannot be deleted while its simulated payment balance is non-zero. Resolve it and try again.";
     private final AccountDeletionRequestRepository requests;
     private final AccountDeletionOtpChallengeRepository challenges;
     private final AppUserRepository users;
@@ -137,6 +137,7 @@ public class AccountDeletionService {
         if(existing.isPresent()) return response(existing.get());
         if(hasUnresolvedPayments(account)) throw new ResponseStatusException(HttpStatus.CONFLICT,PENDING_MESSAGE);
         AccountDeletionRequest request=requests.save(new AccountDeletionRequest(account.getId(),now,account.isAccountLocked(),emailKey(account.getEmail())));
+        sessions.revokeAllForUser(account.getId().toString());
         account.lockAccount();
         challenges.save(challenge);
         return response(request);
@@ -183,6 +184,9 @@ public class AccountDeletionService {
             challenges.deleteAllByUserId(userId);
             passwordChallenges.deleteAllByUserId(id);
             String deletedName="Deleted account";
+            String replacementVpa="deleted."+id+"@deleted.invalid";
+            transactions.anonymizeSenderVpa(user.getUpiId(),replacementVpa);
+            transactions.anonymizeReceiverVpa(user.getUpiId(),replacementVpa);
             user.anonymize(deletedName, "deleted+"+id+"@deleted.invalid", "+1000000"+user.getId().toString().replace("-","").substring(0,8));
             Account account=ledger.findById(user.getUpiId()).orElse(null);
             if(account!=null){account.setHolderName(deletedName);account.setPinHash(null);}
@@ -190,8 +194,16 @@ public class AccountDeletionService {
         }
     }
 
+    @Transactional
     public boolean isDeletedEmail(String email) {
-        return requests.existsByDeletedEmailKey(emailKey(email));
+        String normalized=email.trim().toLowerCase(Locale.ROOT);
+        String keyed=emailKey(normalized);
+        if(requests.existsByDeletedEmailKey(keyed)) return true;
+        // Migrate legacy plain-SHA rows in place on first lookup.
+        String legacy=legacyEmailKey(normalized);
+        List<AccountDeletionRequest> old=requests.findAllByDeletedEmailKey(legacy);
+        for(AccountDeletionRequest row:old) row.migrateDeletedEmailKey(keyed);
+        return !old.isEmpty();
     }
     public String messageForDeletedEmail(String email) {
         return isDeletedEmail(email)?"Your account has been permanently deleted. You cannot log in using this account.":null;
@@ -216,8 +228,9 @@ public class AccountDeletionService {
         return MessageDigest.isEqual(expectedHash.getBytes(StandardCharsets.US_ASCII),hmac(code,secret).getBytes(StandardCharsets.US_ASCII));
     }
     private boolean hasUnresolvedPayments(AppUser user) {
-        return transactions.existsBySenderVpaAndStatusNotIn(user.getUpiId(),List.of(Transaction.Status.SETTLED,Transaction.Status.REJECTED))
-                || transactions.existsByReceiverVpaAndStatusNotIn(user.getUpiId(),List.of(Transaction.Status.SETTLED,Transaction.Status.REJECTED));
+        // Transactions are written only as SETTLED or REJECTED; synced offline logs are client audit records.
+        Account account=ledger.findById(user.getUpiId()).orElse(null);
+        return account!=null&&account.getBalance()!=null&&account.getBalance().signum()!=0;
     }
     private DeletionResponse response(AccountDeletionRequest r) {
         long seconds=Math.max(0,r.getScheduledDeletionAt().getEpochSecond()-Instant.now().getEpochSecond());
@@ -229,7 +242,18 @@ public class AccountDeletionService {
         int at=email.indexOf('@'); String local=email.substring(0,at);
         return (local.isEmpty()?"*":local.substring(0,1)+"***")+email.substring(at);
     }
-    private static String emailKey(String email) {
+    private String emailKey(String email) {
+        if (hmacSecret.getBytes(StandardCharsets.UTF_8).length < 32) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Deleted-email protection requires a configured server secret.");
+        }
+        try {
+            Mac mac=Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(hmacSecret.getBytes(StandardCharsets.UTF_8),"HmacSHA256"));
+            return HexFormat.of().formatHex(mac.doFinal(email.trim().toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8)));
+        } catch(Exception e){throw new IllegalStateException("Deleted-email protection is unavailable.",e);}
+    }
+    private static String legacyEmailKey(String email) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(email.trim().toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8))); }
         catch(Exception e){throw new IllegalStateException("SHA-256 is unavailable",e);}
     }

@@ -28,6 +28,7 @@ public class PrivacyAccountService {
     private final PasswordEncoder passwords;
     private final OfflinePaymentPolicy offlinePaymentPolicy;
     private final AccountDeletionRequestRepository deletionRequests;
+    private final AttemptRateLimiter attempts = new AttemptRateLimiter();
 
     public PrivacyAccountService(AppUserRepository users, TransactionRepository transactions,
                                  PasswordEncoder passwords, OfflinePaymentPolicy offlinePaymentPolicy,
@@ -49,6 +50,11 @@ public class PrivacyAccountService {
 
     @Transactional
     public PrivacyResponse update(AppUser principal, UpdateRequest request) {
+        return update(principal, request, "unknown");
+    }
+
+    @Transactional
+    public PrivacyResponse update(AppUser principal, UpdateRequest request, String remoteAddress) {
         BigDecimal limit = request.offlinePaymentLimit();
         if (limit == null || limit.scale() > 2 || limit.signum() < 0 || limit.compareTo(MAX_OFFLINE_LIMIT) > 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -56,6 +62,12 @@ public class PrivacyAccountService {
         }
         AppUser user = users.findById(principal.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account was not found."));
+        if (limit.compareTo(user.getOfflinePaymentLimit()) > 0) {
+            attempts.check("privacy-limit:user:"+user.getId()+":"+(remoteAddress==null?"unknown":remoteAddress),5,900);
+            if (request.password()==null || !passwords.matches(request.password(), user.getPasswordHash())) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Password verification failed.");
+            }
+        }
         user.updatePrivacySettings(limit.setScale(2), request.hideBalance(), request.hideTransactionDetails());
         return get(user);
     }
@@ -70,7 +82,10 @@ public class PrivacyAccountService {
     }
 
     @Transactional
-    public PrivacyResponse unlock(AppUser principal, String password) {
+    public PrivacyResponse unlock(AppUser principal, String password) { return unlock(principal,password,"unknown"); }
+
+    @Transactional
+    public PrivacyResponse unlock(AppUser principal, String password, String remoteAddress) {
         if (deletionRequests.findFirstByUserIdAndStatusOrderByRequestCreatedAtDesc(
                 principal.getId(), AccountDeletionRequest.Status.PENDING_DELETION).isPresent()) {
             throw new ResponseStatusException(HttpStatus.LOCKED,
@@ -78,9 +93,13 @@ public class PrivacyAccountService {
         }
         AppUser user = users.findByIdForUpdate(principal.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account was not found."));
+        attempts.check("unlock:user:"+user.getId(),5,900);
+        attempts.check("unlock:ip:"+(remoteAddress==null?"unknown":remoteAddress),5,900);
         if (password == null || !passwords.matches(password, user.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Password verification failed.");
         }
+        attempts.clear("unlock:user:"+user.getId());
+        attempts.clear("unlock:ip:"+(remoteAddress==null?"unknown":remoteAddress));
         user.unlockAccount();
         return get(user);
     }
@@ -125,7 +144,11 @@ public class PrivacyAccountService {
     public record UpdateRequest(
             @NotNull @Digits(integer = 5, fraction = 2) @DecimalMax("50000.00") BigDecimal offlinePaymentLimit,
             @NotNull Boolean hideBalance,
-            @NotNull Boolean hideTransactionDetails) {}
+            @NotNull Boolean hideTransactionDetails, String password) {
+        public UpdateRequest(BigDecimal offlinePaymentLimit, Boolean hideBalance, Boolean hideTransactionDetails) {
+            this(offlinePaymentLimit, hideBalance, hideTransactionDetails, null);
+        }
+    }
 
     public record PrivacyResponse(BigDecimal offlinePaymentLimit, BigDecimal offlineSpentLast24Hours,
                                   BigDecimal remainingOfflineAllowance, boolean hideBalance,

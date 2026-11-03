@@ -45,6 +45,9 @@ public class BankOtpChallenge {
     @Column(nullable = false)
     private boolean verified;
 
+    @Column(name = "verified_at")
+    private Instant verifiedAt;
+
     @Column(nullable = false)
     private boolean consumed;
 
@@ -63,8 +66,8 @@ public class BankOtpChallenge {
     public void resend(Instant now, Instant newExpiresAt, Instant newResendAfter) {
         this.expiresAt = newExpiresAt;
         this.resendAfter = newResendAfter;
-        this.attempts = 0;
         this.verified = false;
+        this.verifiedAt = null;
         this.sendCount++;
     }
 
@@ -74,8 +77,11 @@ public class BankOtpChallenge {
         this.attempts++;
     }
 
-    public void markVerified() {
+    public void markVerified() { markVerified(Instant.now()); }
+
+    public void markVerified(Instant at) {
         this.verified = true;
+        this.verifiedAt = at;
         this.otpHash = null;
     }
 
@@ -92,5 +98,6 @@ public class BankOtpChallenge {
     public String getOtpHash() { return otpHash; }
     public int getSendCount() { return sendCount; }
     public boolean isVerified() { return verified; }
+    public Instant getVerifiedAt() { return verifiedAt; }
     public boolean isConsumed() { return consumed; }
 }

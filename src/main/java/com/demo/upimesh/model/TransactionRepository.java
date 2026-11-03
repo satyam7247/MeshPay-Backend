@@ -2,6 +2,7 @@ package com.demo.upimesh.model;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
@@ -18,6 +19,12 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             Transaction.Status receiverStatus, String receiverVpa);
     boolean existsByPacketHash(String packetHash);
     boolean existsByTransactionNonce(String transactionNonce);
+    @Modifying
+    @Query("update Transaction t set t.senderVpa=:replacement where t.senderVpa=:original")
+    int anonymizeSenderVpa(@Param("original") String original, @Param("replacement") String replacement);
+    @Modifying
+    @Query("update Transaction t set t.receiverVpa=:replacement where t.receiverVpa=:original")
+    int anonymizeReceiverVpa(@Param("original") String original, @Param("replacement") String replacement);
     @Query("select coalesce(sum(t.amount), 0) from Transaction t where t.senderVpa = :senderVpa and t.status = :status and t.signedAt > :signedAt")
     BigDecimal sumSettledAmountSince(@Param("senderVpa") String senderVpa,
                                      @Param("status") Transaction.Status status,

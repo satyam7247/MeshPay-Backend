@@ -3,6 +3,8 @@ package com.demo.upimesh.model;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Size;
 
 /**
  * The over-the-wire format. This is what hops from phone to phone via Bluetooth.
@@ -19,10 +21,10 @@ import jakarta.validation.constraints.Min;
  */
 public class MeshPacket {
 
-    @NotBlank
+    @NotBlank @Size(max = 64)
     private String packetId; // UUID, used by intermediates for gossip dedup
 
-    @Min(0)
+    @Min(0) @Max(20)
     private int ttl; // Hops remaining; intermediates decrement it
 
     /** TTL at creation; used by the simulator to report hop count. */
@@ -31,7 +33,7 @@ public class MeshPacket {
     @NotNull
     private Long createdAt; // epoch millis, when sender created the packet
 
-    @NotBlank
+    @NotBlank @Size(max = 4096)
     private String ciphertext; // base64(RSA-encrypted AES key + AES-GCM ciphertext)
 
     public MeshPacket() {}

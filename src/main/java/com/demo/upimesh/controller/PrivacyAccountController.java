@@ -5,6 +5,7 @@ import com.demo.upimesh.service.PrivacyAccountService;
 import com.demo.upimesh.service.TrustedDeviceService;
 import com.demo.upimesh.service.AuthService;
 import com.demo.upimesh.service.SessionTokenService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -32,13 +33,16 @@ public class PrivacyAccountController {
     private final TrustedDeviceService devices;
     private final AuthService auth;
     private final SessionTokenService sessions;
+    private final com.demo.upimesh.service.ClientIpResolver clientIps;
 
     public PrivacyAccountController(PrivacyAccountService privacy, TrustedDeviceService devices,
-                                    AuthService auth, SessionTokenService sessions) {
+                                    AuthService auth, SessionTokenService sessions,
+                                    com.demo.upimesh.service.ClientIpResolver clientIps) {
         this.privacy = privacy;
         this.devices = devices;
         this.auth = auth;
         this.sessions = sessions;
+        this.clientIps = clientIps;
     }
 
     @GetMapping
@@ -48,8 +52,8 @@ public class PrivacyAccountController {
 
     @PutMapping
     public PrivacyAccountService.PrivacyResponse update(@AuthenticationPrincipal AppUser user,
-            @Valid @RequestBody PrivacyAccountService.UpdateRequest request) {
-        return privacy.update(user, request);
+            @Valid @RequestBody PrivacyAccountService.UpdateRequest request, HttpServletRequest httpRequest) {
+        return privacy.update(user, request, clientIps.resolve(httpRequest));
     }
 
     @GetMapping("/devices")
@@ -61,8 +65,8 @@ public class PrivacyAccountController {
     @Transactional
     public TrustedDeviceService.DeviceResponse registerCurrentDevice(@AuthenticationPrincipal AppUser user,
             @RequestHeader(value = "Authorization", required = false) String authorization,
-            @Valid @RequestBody DeviceRegistrationRequest request) {
-        if (!auth.verifyCurrentPassword(user, request.password())) {
+            @Valid @RequestBody DeviceRegistrationRequest request, HttpServletRequest httpRequest) {
+        if (!auth.verifyCurrentPassword(user, request.password(), clientIps.resolve(httpRequest))) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Password verification failed.");
         }
         String deviceId = devices.registerPasswordVerifiedDevice(user, request.deviceId(), request.deviceName(), request.platform());
@@ -88,8 +92,8 @@ public class PrivacyAccountController {
 
     @PostMapping("/unlock")
     public PrivacyAccountService.PrivacyResponse unlock(@AuthenticationPrincipal AppUser user,
-            @Valid @RequestBody UnlockRequest request) {
-        return privacy.unlock(user, request.password());
+            @Valid @RequestBody UnlockRequest request, HttpServletRequest httpRequest) {
+        return privacy.unlock(user, request.password(), clientIps.resolve(httpRequest));
     }
 
     @GetMapping("/sync-status")

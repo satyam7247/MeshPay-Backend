@@ -105,7 +105,7 @@ class BankOtpServiceTest {
     @Test void verifiedOtpCanBeConsumedAfterItsCodeExpires() {
         Fixtures f = new Fixtures();
         BankOtpChallenge challenge = f.challenge("012345");
-        challenge.markVerified();
+        challenge.markVerified(Instant.now().minusSeconds(90));
         ReflectionTestUtils.setField(challenge, "expiresAt", Instant.now().minusSeconds(1));
         when(f.challenges.findByIdAndOwnerUserId(challenge.getId(), f.user.getId()))
                 .thenReturn(Optional.of(challenge));
@@ -130,6 +130,10 @@ class BankOtpServiceTest {
         assertFalse(BankOtpService.verifyEmailCode(challenge.getOtpHash(), oldCode, SECRET));
         assertTrue(BankOtpService.verifyEmailCode(challenge.getOtpHash(), newCode, SECRET));
         assertEquals(2, challenge.getSendCount());
+        challenge.recordFailedAttempt();
+        int attempts = challenge.getAttempts();
+        challenge.resend(Instant.now(), Instant.now().plusSeconds(65), Instant.now().plusSeconds(65));
+        assertEquals(attempts, challenge.getAttempts());
     }
 
     @Test void sendFailureReturns503WithoutSavingOrConsumingChallengeQuota() {

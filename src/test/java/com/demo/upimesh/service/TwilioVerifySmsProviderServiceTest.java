@@ -18,8 +18,8 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 class TwilioVerifySmsProviderServiceTest {
-    private static final String ACCOUNT_SID = "TEST_ACCOUNT_SID";
-    private static final String SERVICE_SID = "TEST_SERVICE_SID";
+    private static final String ACCOUNT_SID = "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private static final String SERVICE_SID = "VA11111111111111111111111111111111";
 
     @Test
     void startsSmsVerificationUsingTwilioAndDoesNotReturnTheOtp() {

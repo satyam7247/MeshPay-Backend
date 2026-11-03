@@ -13,6 +13,8 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 
 @Service
 public class BankAccountService {
@@ -41,13 +43,7 @@ public class BankAccountService {
 
     @Transactional(readOnly = true)
     public List<BankAccountResponse> list(UUID userId) {
-        if (!encryption.isConfigured()) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Bank account details are unavailable until the data encryption key is configured.");
-        }
         return accounts.findAllByOwnerUserIdOrderByCreatedAtDesc(userId).stream()
-                .filter(account -> !"MOCK_SIMULATED".equals(account.getVerificationMode()))
-                .filter(account -> encryption.isEncrypted(account.getAccountHolderName()))
                 .map(this::toResponse)
                 .toList();
     }
@@ -68,38 +64,58 @@ public class BankAccountService {
         if (holder.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Account holder name is required.");
         }
+        String fingerprint = encryption.fingerprint(request.accountNumber());
+        if (accounts.existsByOwnerUserIdAndAccountFingerprint(userId, fingerprint)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This bank account is already linked.");
+        }
         otp.consumeVerified(userId, request.challengeId());
         BankAccount account = accounts.save(new BankAccount(userId, bank, encryption.encrypt(holder),
-                mask(request.accountNumber())));
+                mask(request.accountNumber()), fingerprint));
         return toResponse(account);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = ResponseStatusException.class)
     public BankAccountResponse verify(UUID userId, VerifyBankAccountRequest request) {
         verification.requireConfigured();
         if (!request.accountNumber().matches("[0-9]{9,18}")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Account number must contain 9 to 18 digits.");
         }
-        BankAccount account = accounts.findByIdAndOwnerUserId(request.accountId(), userId)
+        BankAccount account = accounts.findByIdAndOwnerUserIdForUpdate(request.accountId(), userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Bank account was not found."));
         if (!account.getVerificationStatus().equals("PENDING")) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "This bank account has already been checked.");
         }
-        if (!encryption.isEncrypted(account.getAccountHolderName())) {
+        if (account.getAccountFingerprint() == null || account.getAccountFingerprint().isBlank()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "This legacy account must be removed and linked again before verification.");
         }
-        if (!account.getMaskedAccountNumber().endsWith(request.accountNumber()
-                .substring(request.accountNumber().length() - 4))) {
+        if (!account.recordVerifyAttempt(5)) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Too many verification attempts. Remove and link the account again.");
+        }
+        String submittedFingerprint = encryption.fingerprint(request.accountNumber());
+        if (!MessageDigest.isEqual(account.getAccountFingerprint().getBytes(StandardCharsets.US_ASCII),
+                submittedFingerprint.getBytes(StandardCharsets.US_ASCII))) {
+            accounts.saveAndFlush(account);
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Account number does not match the linked account.");
         }
-        BankVerificationService.VerificationResult result = verification.verify(
+        BankVerificationService.VerificationResult result;
+        try {
+            result = verification.verify(
                 encryption.decrypt(account.getAccountHolderName()),
                 request.accountNumber(), request.ifsc());
+        } catch (ResponseStatusException failure) {
+            accounts.saveAndFlush(account);
+            throw failure;
+        } catch (RuntimeException failure) {
+            accounts.saveAndFlush(account);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Bank account verification is temporarily unavailable.");
+        }
         account.updateVerificationResult(result.status(), result.verificationMode(),
                 result.message(), result.providerReference(),
                 result.verifiedAccountHolderName() == null ? null
@@ -134,8 +150,12 @@ public class BankAccountService {
     }
 
     private BankAccountResponse toResponse(BankAccount account) {
+        String holder = account.getAccountHolderName();
+        if (encryption.isEncrypted(holder)) {
+            holder = encryption.isConfigured() ? encryption.decrypt(holder) : "Linked account";
+        }
         return new BankAccountResponse(account.getId(), account.getBankName(),
-                encryption.decrypt(account.getAccountHolderName()), account.getMaskedAccountNumber(),
+                holder, account.getMaskedAccountNumber(),
                 account.getVerificationStatus(), account.getVerificationMode(),
                 account.getVerificationMessage(), account.getProviderReference(),
                 account.getCreatedAt(), account.getUpdatedAt());
