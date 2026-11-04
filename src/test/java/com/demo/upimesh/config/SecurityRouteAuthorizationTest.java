@@ -4,6 +4,9 @@ import com.demo.upimesh.model.AppUser;
 import com.demo.upimesh.model.AppUserRepository;
 import com.demo.upimesh.service.SessionTokenService;
 import com.demo.upimesh.service.AuthService;
+import com.demo.upimesh.service.BrevoEmailService;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -26,6 +29,8 @@ class SecurityRouteAuthorizationTest {
     @Autowired private AppUserRepository users;
     @Autowired private SessionTokenService sessions;
     @Autowired private AuthService authService;
+    @Autowired private PasswordEncoder passwordEncoder;
+    @MockBean private BrevoEmailService email;
 
     @Test
     void anonymousSimulatorAndBridgeRequestsAreRejected() throws Exception {
@@ -57,13 +62,13 @@ class SecurityRouteAuthorizationTest {
     void enablingAppLockRestrictsProtectedRoutesUntilSessionUnlocks() throws Exception {
         String suffix=UUID.randomUUID().toString().replace("-","").substring(0,12);
         AppUser user=users.saveAndFlush(new AppUser("Lock User",suffix+"@example.test",
-                "9"+suffix.substring(0,9),"test-password-hash",suffix+"@meshpay"));
+                "9"+suffix.substring(0,9),passwordEncoder.encode("account-pass"),suffix+"@meshpay"));
         String bearer="Bearer "+sessions.issue(user.getId().toString());
         sessions.setAppLockVerified(bearer.substring(7),user.getId().toString(),true);
 
         mockMvc.perform(get("/api/auth/me").header("Authorization",bearer)).andExpect(status().isOk());
         mockMvc.perform(post("/api/app-lock/enable").header("Authorization",bearer)
-                .contentType("application/json").content("{\"passwordType\":\"numeric\",\"password\":\"123456\"}"))
+                .contentType("application/json").content("{\"accountPassword\":\"account-pass\",\"passwordType\":\"numeric\",\"password\":\"123456\"}"))
                 .andExpect(status().isOk());
         mockMvc.perform(get("/api/auth/me").header("Authorization",bearer)).andExpect(status().is(423));
         mockMvc.perform(get("/api/app-lock").header("Authorization",bearer)).andExpect(status().isOk());

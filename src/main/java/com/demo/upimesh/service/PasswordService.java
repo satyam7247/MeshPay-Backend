@@ -70,6 +70,19 @@ public class PasswordService {
     }
 
     @Transactional
+    public void verifyAccountPasswordForAppLock(AppUser user, String password, String ip) {
+        String userKey="app-lock-enable:user:"+user.getId();
+        String ipKey="app-lock-enable:ip:"+(ip==null?"unknown":ip);
+        attempts.check(userKey,5,900);
+        attempts.check(ipKey,5,900);
+        if (!encoder.matches(password==null?"":password,user.getPasswordHash())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Account password is incorrect.");
+        }
+        attempts.clear(userKey);
+        attempts.clear(ipKey);
+    }
+
+    @Transactional
     public ChallengeResponse requestForgotOtp(String emailAddress, String requesterAddress) {
         return issueOtp(emailAddress,requesterAddress,PasswordChallenge.Purpose.FORGOT,null,true);
     }
@@ -186,6 +199,7 @@ public class PasswordService {
         if (!user.isAppLockEnabled()) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"App Lock is not enabled for this account.");
         user.enableAppLock(type,encoder.encode(newPassword));
         challenge.consumeReset();
+        email.sendAppLockChanged(user.getEmail(),true);
     }
 
     private boolean validScreenLockPassword(String type,String password) {

@@ -91,6 +91,31 @@ class PasswordServiceTest {
         assertEquals(HttpStatus.TOO_MANY_REQUESTS,ipLimited.getStatusCode());
     }
 
+    @Test void appLockEnableAccountPasswordCheckUsesPerUserAndIpLimiter() throws Exception {
+        AppUser user=newUserWithId();
+        ResponseStatusException wrong=assertThrows(ResponseStatusException.class,
+                ()->service.verifyAccountPasswordForAppLock(user,"wrong","enable-ip"));
+        assertEquals(HttpStatus.UNAUTHORIZED,wrong.getStatusCode());
+        assertDoesNotThrow(()->service.verifyAccountPasswordForAppLock(user,"OldPass1!","enable-ip"));
+        for(int i=0;i<5;i++) {
+            String ip="locked-user-ip-"+i;
+            assertThrows(ResponseStatusException.class,()->service.verifyAccountPasswordForAppLock(user,"bad",ip));
+        }
+        ResponseStatusException userLimited=assertThrows(ResponseStatusException.class,
+                ()->service.verifyAccountPasswordForAppLock(user,"OldPass1!","another-ip"));
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS,userLimited.getStatusCode());
+        assertEquals("900",userLimited.getHeaders().getFirst("Retry-After"));
+
+        for(int i=0;i<5;i++) {
+            AppUser distinctUser=newUserWithId();
+            assertThrows(ResponseStatusException.class,
+                    ()->service.verifyAccountPasswordForAppLock(distinctUser,"bad","shared-enable-ip"));
+        }
+        ResponseStatusException ipLimited=assertThrows(ResponseStatusException.class,
+                ()->service.verifyAccountPasswordForAppLock(newUserWithId(),"OldPass1!","shared-enable-ip"));
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS,ipLimited.getStatusCode());
+    }
+
     @Test void forgotPasswordResponseDoesNotRevealWhetherAccountExistsOrReturnOtp() throws Exception {
         when(email.isConfigured()).thenReturn(true);
         when(users.findByEmailIgnoreCase("nobody@example.test")).thenReturn(Optional.empty());
@@ -168,6 +193,7 @@ class PasswordServiceTest {
         assertEquals("alphabetic",user.getAppLockType());
         assertTrue(encoder.matches("AbCdEf",user.getAppLockPasswordHash()));
         assertTrue(latest.get().isResetConsumed());
+        verify(email).sendAppLockChanged(user.getEmail(),true);
     }
 
     @Test void fiveIncorrectOtpAttemptsBlockFurtherVerification() throws Exception {

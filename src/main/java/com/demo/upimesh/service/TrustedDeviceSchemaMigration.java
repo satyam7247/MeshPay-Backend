@@ -60,6 +60,8 @@ public class TrustedDeviceSchemaMigration implements ApplicationRunner {
                 for (String indexName : obsoleteIndexes) {
                     if (product.contains("mysql") || product.contains("mariadb")) {
                         statement.execute("ALTER TABLE trusted_devices DROP INDEX " + indexName);
+                    } else if (product.contains("h2")) {
+                        statement.execute("DROP INDEX " + indexName);
                     } else {
                         statement.execute("ALTER TABLE trusted_devices DROP CONSTRAINT " + indexName);
                     }

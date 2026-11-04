@@ -4,6 +4,7 @@ import com.demo.upimesh.model.AppUser;
 import com.demo.upimesh.service.AppLockService;
 import com.demo.upimesh.service.ClientIpResolver;
 import com.demo.upimesh.service.PasswordService;
+import com.demo.upimesh.service.BrevoEmailService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -24,13 +25,15 @@ public class AppLockController {
     private final PasswordService passwords;
     private final ClientIpResolver clientIps;
     private final com.demo.upimesh.service.SessionTokenService sessions;
+    private final BrevoEmailService email;
 
     public AppLockController(AppLockService locks, PasswordService passwords, ClientIpResolver clientIps,
-                             com.demo.upimesh.service.SessionTokenService sessions) {
+                             com.demo.upimesh.service.SessionTokenService sessions, BrevoEmailService email) {
         this.locks = locks;
         this.passwords = passwords;
         this.clientIps = clientIps;
         this.sessions = sessions;
+        this.email = email;
     }
 
     @GetMapping
@@ -41,10 +44,12 @@ public class AppLockController {
     @PostMapping("/enable")
     @Transactional
     public AppLockService.Status enable(@Valid @RequestBody EnableRequest request, Authentication authentication,
-                                        @RequestHeader("Authorization") String authorization) {
+                                        @RequestHeader("Authorization") String authorization, HttpServletRequest httpRequest) {
         AppUser user=(AppUser) authentication.getPrincipal();
+        passwords.verifyAccountPasswordForAppLock(user,request.accountPassword(),clientIps.resolve(httpRequest));
         AppLockService.Status status=locks.enable(user, request.passwordType(), request.password());
         sessions.setAppLockVerified(bearer(authorization),user.getId().toString(),false);
+        email.sendAppLockChanged(user.getEmail(),false);
         return status;
     }
 
@@ -91,7 +96,8 @@ public class AppLockController {
         return locks.status(user);
     }
 
-    public record EnableRequest(@NotBlank @Size(max = 12) String passwordType,
+    public record EnableRequest(@NotBlank @Size(max = 72) String accountPassword,
+                                @NotBlank @Size(max = 12) String passwordType,
                                 @NotBlank @Size(min = 6, max = 6) String password) {}
     public record ScreenLockPasswordRequest(@NotBlank @Size(max = 6) String password) {}
     public record VerifyOtpRequest(@NotBlank @Size(max = 36) String challengeId,

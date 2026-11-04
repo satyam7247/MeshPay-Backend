@@ -43,6 +43,8 @@ For production, activate `prod` with `SPRING_PROFILES_ACTIVE=prod` (or `--spring
 
 Feature-specific server variables: Twilio OTP delivery needs `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_VERIFY_SERVICE_SID`; Brevo email needs `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, and `BREVO_SENDER_NAME`; Cashfree bank verification needs `BANK_VERIFICATION_PROVIDER=cashfree`, its environment and client credentials, plus `BANK_DATA_ENCRYPTION_KEY`. Keep all credentials in the backend environment or secrets manager. `.env.example` contains placeholders only. `DB_DDL_AUTO` applies to development; production is fixed to `validate`.
 
+App Lock sessions expire after five minutes without an authenticated request by default. Set `APP_LOCK_IDLE_TIMEOUT_SECONDS` to change that idle window; `APP_LOCK_IDLE_TIMEOUT_SECONDS=300` is shown in `.env.example`.
+
 ### Prerequisites
 
 - **JDK 17 or newer** installed and on PATH (or `JAVA_HOME` set). Check with `java -version`.

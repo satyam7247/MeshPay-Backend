@@ -7,4 +7,9 @@ ALTER TABLE app_users
     ADD COLUMN app_lock_locked_until DATETIME(6) NULL;
 
 ALTER TABLE app_sessions
-    ADD COLUMN app_lock_verified BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN app_lock_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN app_lock_verified_at DATETIME(6) NULL;
+
+-- Keep APP_LOCK as a portable string value on MySQL instead of a native enum.
+ALTER TABLE password_challenges
+    MODIFY COLUMN purpose VARCHAR(12) NOT NULL;

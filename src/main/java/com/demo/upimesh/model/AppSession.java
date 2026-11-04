@@ -26,6 +26,9 @@ public class AppSession {
     @Column(name = "app_lock_verified", nullable = false, columnDefinition = "boolean default false")
     private Boolean appLockVerified = Boolean.FALSE;
 
+    @Column(name = "app_lock_verified_at")
+    private Instant appLockVerifiedAt;
+
     protected AppSession() {}
 
     public AppSession(String tokenHash, String userId, Instant expiresAt) {
@@ -43,5 +46,13 @@ public class AppSession {
     public Instant getExpiresAt() { return expiresAt; }
     public String getDeviceId() { return deviceId; }
     public boolean isAppLockVerified() { return Boolean.TRUE.equals(appLockVerified); }
-    public void setAppLockVerified(boolean verified) { this.appLockVerified = verified; }
+    public void setAppLockVerified(boolean verified) {
+        this.appLockVerified = verified;
+        this.appLockVerifiedAt = verified ? Instant.now() : null;
+    }
+    public Instant getAppLockVerifiedAt() { return appLockVerifiedAt; }
+    public boolean isAppLockVerifiedExpired(Instant now, long idleSeconds) {
+        return appLockVerifiedAt == null || !appLockVerifiedAt.plusSeconds(idleSeconds).isAfter(now);
+    }
+    public void recordAppLockActivity(Instant now) { this.appLockVerifiedAt = now; }
 }

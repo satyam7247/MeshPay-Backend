@@ -96,6 +96,17 @@ public class BrevoEmailService {
         }
     }
 
+    public void sendAppLockChanged(String email, boolean reset) {
+        if (!isConfigured()) throw new EmailDeliveryUnavailableException();
+        Map<String,Object> message=Map.of("sender",Map.of("email",senderEmail,"name",senderName),
+                "to",java.util.List.of(Map.of("email",email)),
+                "subject", reset ? "MeshPay App Lock reset" : "MeshPay App Lock enabled",
+                "htmlContent", reset
+                        ? "<p>Your MeshPay App Lock password was reset.</p><p>If you did not do this, contact support.</p>"
+                        : "<p>App Lock was enabled for your MeshPay account.</p><p>If you did not do this, contact support.</p>");
+        sendMessage(message,"app lock notification");
+    }
+
     public void sendBankLinkOtp(String email, String otp) {
         if (!isConfigured()) throw new EmailDeliveryUnavailableException();
         String html = "<p>Your Link bank account verification code is <strong>"+otp+"</strong>.</p>"

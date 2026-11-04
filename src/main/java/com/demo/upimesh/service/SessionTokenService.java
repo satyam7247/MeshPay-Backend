@@ -24,6 +24,9 @@ public class SessionTokenService {
     private final TrustedDeviceService trustedDevices;
     private final SecureRandom random = new SecureRandom();
 
+    @Value("${upi.app-lock.idle-timeout-seconds:300}")
+    private long appLockIdleTimeoutSeconds;
+
     @Value("${upi.auth.session-ttl-seconds:43200}")
     private long sessionTtlSeconds;
 
@@ -84,6 +87,20 @@ public class SessionTokenService {
     public boolean isAppLockVerified(String rawToken) {
         if (rawToken == null || rawToken.isBlank()) return false;
         return sessions.findById(hash(rawToken)).map(AppSession::isAppLockVerified).orElse(false);
+    }
+
+    @Transactional
+    public boolean isAppLockVerifiedAndTouch(String rawToken) {
+        if (rawToken == null || rawToken.isBlank()) return false;
+        AppSession session = sessions.findById(hash(rawToken)).orElse(null);
+        if (session == null || !session.isAppLockVerified()) return false;
+        Instant now = Instant.now();
+        if (session.isAppLockVerifiedExpired(now, Math.max(1, appLockIdleTimeoutSeconds))) {
+            session.setAppLockVerified(false);
+            return false;
+        }
+        session.recordAppLockActivity(now);
+        return true;
     }
 
     @Transactional

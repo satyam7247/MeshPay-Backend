@@ -26,7 +26,7 @@ public class PasswordChallenge {
     private String emailKey;
     @Column(name="requester_key", length=64)
     private String requesterKey;
-    @Enumerated(EnumType.STRING) @Column(nullable=false, length=12)
+    @Enumerated(EnumType.STRING) @Column(nullable=false, length=12, columnDefinition="varchar(12)")
     private Purpose purpose;
     @Column(name="otp_hash", length=100)
     private String otpHash;
