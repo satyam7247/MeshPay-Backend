@@ -90,7 +90,7 @@ public class BankAccountService {
         }
         if (account.getAccountFingerprint() == null || account.getAccountFingerprint().isBlank()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "This legacy account must be removed and linked again before verification.");
+                    "Remove and link this legacy bank account again before verifying it.");
         }
         if (!account.recordVerifyAttempt(5)) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,

@@ -12,6 +12,7 @@ import java.util.Base64;
 import java.util.Locale;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,11 +32,19 @@ public class PasswordService {
     private final SessionTokenService sessions;
     private final BrevoEmailService email;
     private final SecureRandom random=new SecureRandom();
-    private final AttemptRateLimiter attempts=new AttemptRateLimiter();
+    private final AttemptRateLimiter attempts;
+
+    @Autowired
+    public PasswordService(AppUserRepository users, PasswordChallengeRepository challenges,
+                           PasswordEncoder encoder, SessionTokenService sessions, BrevoEmailService email,
+                           AttemptRateLimiter attempts) {
+        this.users=users; this.challenges=challenges; this.encoder=encoder; this.sessions=sessions; this.email=email;
+        this.attempts=attempts;
+    }
 
     public PasswordService(AppUserRepository users, PasswordChallengeRepository challenges,
                            PasswordEncoder encoder, SessionTokenService sessions, BrevoEmailService email) {
-        this.users=users; this.challenges=challenges; this.encoder=encoder; this.sessions=sessions; this.email=email;
+        this(users, challenges, encoder, sessions, email, new AttemptRateLimiter());
     }
 
     @Transactional
@@ -51,11 +60,11 @@ public class PasswordService {
         if (!encoder.matches(currentPassword == null ? "" : currentPassword,user.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Current password is incorrect.");
         }
+        attempts.clear("password-change:user:"+user.getId());
+        attempts.clear("password-change:ip:"+(ip==null?"unknown":ip));
         if (encoder.matches(newPassword,user.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"New password must differ from your current password.");
         }
-        attempts.clear("password-change:user:"+user.getId());
-        attempts.clear("password-change:ip:"+(ip==null?"unknown":ip));
         user.changePasswordHash(encoder.encode(newPassword));
         sessions.revokeAllForUser(user.getId().toString());
     }
@@ -68,6 +77,12 @@ public class PasswordService {
     @Transactional
     public ChallengeResponse requestChangeOtp(AppUser user, String requesterAddress) {
         return issueOtp(user.getEmail(),requesterAddress,PasswordChallenge.Purpose.CHANGE,user,false);
+    }
+
+    @Transactional
+    public ChallengeResponse requestScreenLockOtp(AppUser user, String requesterAddress) {
+        if (!user.isAppLockEnabled()) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"App Lock is not enabled for this account.");
+        return issueOtp(user.getEmail(),requesterAddress,PasswordChallenge.Purpose.APP_LOCK,user,false);
     }
 
     private ChallengeResponse issueOtp(String emailAddress, String requesterAddress, PasswordChallenge.Purpose purpose, AppUser requiredUser,
@@ -97,7 +112,10 @@ public class PasswordService {
                 user==null?null:user.getId().toString(),emailKey,requesterKey,purpose,encoder.encode(otp),
                 now.plusSeconds(OTP_TTL_SECONDS),now));
         if (user!=null) {
-            try { email.sendPasswordOtp(user.getEmail(),otp); }
+            try {
+                if (purpose == PasswordChallenge.Purpose.APP_LOCK) email.sendAppLockResetOtp(user.getEmail(),otp);
+                else email.sendPasswordOtp(user.getEmail(),otp);
+            }
             catch (BrevoEmailService.EmailDeliveryUnavailableException failure) {
                 challenge.invalidate();
                 if (!hideAccountExistence) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Email delivery is unavailable. Try again later.");
@@ -110,7 +128,24 @@ public class PasswordService {
 
     @Transactional(noRollbackFor=ResponseStatusException.class)
     public ResetAuthorization verifyOtp(String challengeId, String code) {
+        return verifyOtpFor(challengeId,code,null,null);
+    }
+
+    @Transactional(noRollbackFor=ResponseStatusException.class)
+    public ResetAuthorization verifyScreenLockOtp(AppUser user, String challengeId, String code) {
+        try { return verifyOtpFor(challengeId,code,user.getId().toString(),PasswordChallenge.Purpose.APP_LOCK); }
+        catch (ResponseStatusException invalid) {
+            if (invalid.getStatusCode()==HttpStatus.UNAUTHORIZED)
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Verification code is invalid or expired.");
+            throw invalid;
+        }
+    }
+
+    private ResetAuthorization verifyOtpFor(String challengeId, String code, String expectedUserId, PasswordChallenge.Purpose expectedPurpose) {
         PasswordChallenge challenge=lockChallenge(challengeId);
+        if (expectedPurpose==null && challenge.getPurpose()==PasswordChallenge.Purpose.APP_LOCK) throw invalidOtp();
+        if ((expectedUserId!=null && !expectedUserId.equals(challenge.getUserId()))
+                || (expectedPurpose!=null && challenge.getPurpose()!=expectedPurpose)) throw invalidOtp();
         ensureLatest(challenge);
         if (challenge.getUserId()==null || challenge.isOtpConsumed() || challenge.getOtpExpiresAt()==null
                 || challenge.getOtpExpiresAt().isBefore(Instant.now()) || challenge.getAttempts()>=MAX_ATTEMPTS) {
@@ -127,9 +162,44 @@ public class PasswordService {
     }
 
     @Transactional
+    public void resetScreenLock(AppUser principal, String challengeId, String resetToken, String type, String newPassword) {
+        if (!validScreenLockPassword(type,newPassword)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Screen lock password must match the selected six-character password type.");
+        }
+        PasswordChallenge challenge;
+        try {
+            challenge=lockChallenge(challengeId);
+            ensureLatest(challenge);
+        } catch (ResponseStatusException invalid) {
+            if (invalid.getStatusCode()==HttpStatus.UNAUTHORIZED)
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Screen lock reset authorization is invalid or expired.");
+            throw invalid;
+        }
+        if (challenge.getPurpose()!=PasswordChallenge.Purpose.APP_LOCK || !principal.getId().toString().equals(challenge.getUserId())
+                || challenge.isResetConsumed() || challenge.getResetTokenHash()==null
+                || challenge.getResetExpiresAt()==null || challenge.getResetExpiresAt().isBefore(Instant.now())
+                || resetToken==null || !MessageDigest.isEqual(challenge.getResetTokenHash().getBytes(StandardCharsets.US_ASCII),sha256(resetToken).getBytes(StandardCharsets.US_ASCII))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Screen lock reset authorization is invalid or expired.");
+        }
+        AppUser user=users.findByIdForUpdate(principal.getId())
+                .orElseThrow(()->new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Screen lock reset authorization is invalid or expired."));
+        if (!user.isAppLockEnabled()) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"App Lock is not enabled for this account.");
+        user.enableAppLock(type,encoder.encode(newPassword));
+        challenge.consumeReset();
+    }
+
+    private boolean validScreenLockPassword(String type,String password) {
+        return password!=null && password.length()==6
+                && ("numeric".equals(type)?password.matches("[0-9]{6}"):"alphabetic".equals(type)&&password.matches("[A-Za-z]{6}"));
+    }
+
+    @Transactional
     public void resetPassword(String challengeId, String resetToken, String newPassword) {
         PasswordPolicy.requireValid(newPassword);
         PasswordChallenge challenge=lockChallenge(challengeId);
+        if (challenge.getPurpose()==PasswordChallenge.Purpose.APP_LOCK) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Password reset authorization is invalid or expired.");
+        }
         ensureLatest(challenge);
         if (challenge.getUserId()==null || challenge.isResetConsumed() || challenge.getResetTokenHash()==null
                 || challenge.getResetExpiresAt()==null || challenge.getResetExpiresAt().isBefore(Instant.now())

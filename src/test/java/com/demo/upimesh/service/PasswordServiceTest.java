@@ -26,12 +26,14 @@ class PasswordServiceTest {
     private BrevoEmailService email;
     private BCryptPasswordEncoder encoder;
     private PasswordService service;
+    private AttemptRateLimiter attempts;
 
     @BeforeEach void setUp(){
         users=mock(AppUserRepository.class); challenges=mock(PasswordChallengeRepository.class);
         sessions=mock(SessionTokenService.class); email=mock(BrevoEmailService.class);
         encoder=new BCryptPasswordEncoder(4);
-        service=new PasswordService(users,challenges,encoder,sessions,email);
+        attempts=new AttemptRateLimiter();
+        service=new PasswordService(users,challenges,encoder,sessions,email,attempts);
     }
 
     @Test void changingPasswordUsesBcryptAndRevokesEverySession() throws Exception {
@@ -64,6 +66,29 @@ class PasswordServiceTest {
         assertEquals(HttpStatus.UNAUTHORIZED,error.getStatusCode());
         assertEquals(original,user.getPasswordHash());
         verifyNoInteractions(sessions);
+    }
+
+    @Test void currentPasswordChangeIsLimitedByUserAndClientIp() throws Exception {
+        AppUser user=newUserWithId();
+        for(int i=0;i<5;i++) {
+            ResponseStatusException wrong=assertThrows(ResponseStatusException.class,
+                    ()->service.changeWithCurrentPassword(user,"wrong","NewPass2!","user-ip-"+System.nanoTime()));
+            assertEquals(HttpStatus.UNAUTHORIZED,wrong.getStatusCode());
+        }
+        ResponseStatusException userLimited=assertThrows(ResponseStatusException.class,
+                ()->service.changeWithCurrentPassword(user,"wrong","NewPass2!","another-ip"));
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS,userLimited.getStatusCode());
+        assertEquals("900",userLimited.getHeaders().getFirst("Retry-After"));
+
+        for(int i=0;i<5;i++) {
+            AppUser distinctUser=newUserWithId();
+            ResponseStatusException wrong=assertThrows(ResponseStatusException.class,
+                    ()->service.changeWithCurrentPassword(distinctUser,"wrong","NewPass2!","shared-ip"));
+            assertEquals(HttpStatus.UNAUTHORIZED,wrong.getStatusCode());
+        }
+        ResponseStatusException ipLimited=assertThrows(ResponseStatusException.class,
+                ()->service.changeWithCurrentPassword(newUserWithId(),"wrong","NewPass2!","shared-ip"));
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS,ipLimited.getStatusCode());
     }
 
     @Test void forgotPasswordResponseDoesNotRevealWhetherAccountExistsOrReturnOtp() throws Exception {
@@ -112,6 +137,37 @@ class PasswordServiceTest {
         ResponseStatusException reused=assertThrows(ResponseStatusException.class,
                 ()->service.verifyOtp(challenge.challengeId(),deliveredCode.get()));
         assertEquals(HttpStatus.UNAUTHORIZED,reused.getStatusCode());
+    }
+
+    @Test void screenLockOtpIsDeliveredToItsAccountAndCannotBeUsedForAccountPasswordReset() throws Exception {
+        when(email.isConfigured()).thenReturn(true);
+        AppUser user=newUserWithId();
+        user.enableAppLock("numeric",encoder.encode("123456"));
+        AtomicReference<PasswordChallenge> latest=new AtomicReference<>();
+        AtomicReference<String> deliveredCode=new AtomicReference<>();
+        when(challenges.countByRequesterKeyAndCreatedAtAfter(anyString(),any())).thenReturn(0L);
+        when(users.findByIdForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(challenges.findFirstByEmailKeyAndPurposeOrderByCreatedAtDesc(anyString(),any()))
+                .thenAnswer(call->Optional.ofNullable(latest.get()));
+        when(challenges.save(any(PasswordChallenge.class))).thenAnswer(call->{
+            PasswordChallenge challenge=call.getArgument(0);
+            Field id=PasswordChallenge.class.getDeclaredField("id");id.setAccessible(true);id.set(challenge,UUID.randomUUID());
+            latest.set(challenge);return challenge;
+        });
+        when(challenges.findByIdForUpdate(any(UUID.class))).thenAnswer(call->Optional.ofNullable(latest.get()));
+        doAnswer(call->{deliveredCode.set(call.getArgument(1));return null;})
+                .when(email).sendAppLockResetOtp(anyString(),anyString());
+
+        var challenge=service.requestScreenLockOtp(user,"127.0.0.1");
+        assertEquals(PasswordChallenge.Purpose.APP_LOCK,latest.get().getPurpose());
+        verify(email).sendAppLockResetOtp(eq(user.getEmail()),anyString());
+        assertThrows(ResponseStatusException.class,()->service.verifyOtp(challenge.challengeId(),deliveredCode.get()));
+        var grant=service.verifyScreenLockOtp(user,challenge.challengeId(),deliveredCode.get());
+        assertNotNull(grant.resetToken());
+        service.resetScreenLock(user,challenge.challengeId(),grant.resetToken(),"alphabetic","AbCdEf");
+        assertEquals("alphabetic",user.getAppLockType());
+        assertTrue(encoder.matches("AbCdEf",user.getAppLockPasswordHash()));
+        assertTrue(latest.get().isResetConsumed());
     }
 
     @Test void fiveIncorrectOtpAttemptsBlockFurtherVerification() throws Exception {

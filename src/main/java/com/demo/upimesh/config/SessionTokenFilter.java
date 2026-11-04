@@ -45,17 +45,30 @@ public class SessionTokenFilter extends OncePerRequestFilter {
             String token = authorization.substring(7).trim();
             java.util.Optional<String> userId = tokens.resolve(token);
             if (userId.isEmpty()) log.warn("Protected API request has a rejected bearer token: {}", request.getRequestURI());
-            userId.flatMap(id -> {
-                        try { return users.findById(java.util.UUID.fromString(id)); }
-                        catch (IllegalArgumentException e) { return java.util.Optional.empty(); }
-                    })
-                    .ifPresent(user -> {
-                        UsernamePasswordAuthenticationToken authentication =
-                                new UsernamePasswordAuthenticationToken(user, null,
-                                        List.of(new SimpleGrantedAuthority("ROLE_USER")));
-                        SecurityContextHolder.getContext().setAuthentication(authentication);
-                    });
+            else {
+                java.util.Optional<AppUser> user = userId.flatMap(id -> {
+                    try { return users.findById(java.util.UUID.fromString(id)); }
+                    catch (IllegalArgumentException e) { return java.util.Optional.empty(); }
+                });
+                if (user.isPresent() && user.get().isAppLockEnabled() && !tokens.isAppLockVerified(token)
+                        && !isAppLockExempt(request.getRequestURI())) {
+                    response.setStatus(423);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"APP_LOCK_REQUIRED\",\"message\":\"Unlock MeshPay to continue.\"}");
+                    return;
+                }
+                user.ifPresent(account -> {
+                    UsernamePasswordAuthenticationToken authentication =
+                            new UsernamePasswordAuthenticationToken(account, null,
+                                    List.of(new SimpleGrantedAuthority("ROLE_USER")));
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                });
+            }
         }
         chain.doFilter(request, response);
+    }
+
+    private boolean isAppLockExempt(String path) {
+        return path.equals("/api/auth/logout") || path.equals("/api/app-lock") || path.startsWith("/api/app-lock/");
     }
 }

@@ -28,16 +28,24 @@ public class PrivacyAccountService {
     private final PasswordEncoder passwords;
     private final OfflinePaymentPolicy offlinePaymentPolicy;
     private final AccountDeletionRequestRepository deletionRequests;
-    private final AttemptRateLimiter attempts = new AttemptRateLimiter();
+    private final AttemptRateLimiter attempts;
 
     public PrivacyAccountService(AppUserRepository users, TransactionRepository transactions,
                                  PasswordEncoder passwords, OfflinePaymentPolicy offlinePaymentPolicy,
                                  AccountDeletionRequestRepository deletionRequests) {
+        this(users, transactions, passwords, offlinePaymentPolicy, deletionRequests, new AttemptRateLimiter());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PrivacyAccountService(AppUserRepository users, TransactionRepository transactions,
+                                 PasswordEncoder passwords, OfflinePaymentPolicy offlinePaymentPolicy,
+                                 AccountDeletionRequestRepository deletionRequests, AttemptRateLimiter attempts) {
         this.users = users;
         this.transactions = transactions;
         this.passwords = passwords;
         this.offlinePaymentPolicy = offlinePaymentPolicy;
         this.deletionRequests = deletionRequests;
+        this.attempts = attempts;
     }
 
     @Transactional(readOnly = true)
@@ -63,10 +71,15 @@ public class PrivacyAccountService {
         AppUser user = users.findById(principal.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account was not found."));
         if (limit.compareTo(user.getOfflinePaymentLimit()) > 0) {
-            attempts.check("privacy-limit:user:"+user.getId()+":"+(remoteAddress==null?"unknown":remoteAddress),5,900);
+            String userKey = "privacy-limit:user:" + user.getId();
+            String ipKey = "privacy-limit:ip:" + (remoteAddress == null ? "unknown" : remoteAddress);
+            attempts.check(userKey, 5, 900);
+            attempts.check(ipKey, 5, 900);
             if (request.password()==null || !passwords.matches(request.password(), user.getPasswordHash())) {
                 throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Password verification failed.");
             }
+            attempts.clear(userKey);
+            attempts.clear(ipKey);
         }
         user.updatePrivacySettings(limit.setScale(2), request.hideBalance(), request.hideTransactionDetails());
         return get(user);

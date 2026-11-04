@@ -71,6 +71,21 @@ public class AppUser {
     @Column(name = "account_locked_at")
     private Instant accountLockedAt;
 
+    @Column(name = "app_lock_enabled", nullable = false, columnDefinition = "boolean default false")
+    private Boolean appLockEnabled = Boolean.FALSE;
+
+    @Column(name = "app_lock_type", length = 12)
+    private String appLockType;
+
+    @Column(name = "app_lock_password_hash", length = 100)
+    private String appLockPasswordHash;
+
+    @Column(name = "app_lock_failed_attempts", nullable = false, columnDefinition = "integer default 0")
+    private Integer appLockFailedAttempts = 0;
+
+    @Column(name = "app_lock_locked_until")
+    private Instant appLockLockedUntil;
+
     protected AppUser() {}
 
     public AppUser(String name, String email, String phone, String passwordHash, String upiId) {
@@ -116,6 +131,36 @@ public class AppUser {
     public boolean isHideTransactionDetails() { return Boolean.TRUE.equals(hideTransactionDetails); }
     public boolean isAccountLocked() { return Boolean.TRUE.equals(accountLocked); }
     public Instant getAccountLockedAt() { return accountLockedAt; }
+    public boolean isAppLockEnabled() { return Boolean.TRUE.equals(appLockEnabled); }
+    public String getAppLockType() { return appLockType; }
+    public String getAppLockPasswordHash() { return appLockPasswordHash; }
+    public int getAppLockFailedAttempts() { return appLockFailedAttempts == null ? 0 : appLockFailedAttempts; }
+    public Instant getAppLockLockedUntil() { return appLockLockedUntil; }
+
+    public void enableAppLock(String type, String passwordHash) {
+        this.appLockEnabled = Boolean.TRUE;
+        this.appLockType = type;
+        this.appLockPasswordHash = passwordHash;
+        clearAppLockFailures();
+    }
+
+    public void disableAppLock() {
+        this.appLockEnabled = Boolean.FALSE;
+        this.appLockType = null;
+        this.appLockPasswordHash = null;
+        clearAppLockFailures();
+    }
+
+    public int recordFailedAppLockAttempt(Instant now) {
+        this.appLockFailedAttempts = getAppLockFailedAttempts() + 1;
+        if (this.appLockFailedAttempts >= 5) this.appLockLockedUntil = now.plusSeconds(900);
+        return this.appLockFailedAttempts;
+    }
+
+    public void clearAppLockFailures() {
+        this.appLockFailedAttempts = 0;
+        this.appLockLockedUntil = null;
+    }
 
     public void updatePrivacySettings(BigDecimal offlinePaymentLimit, boolean hideBalance,
                                       boolean hideTransactionDetails) {

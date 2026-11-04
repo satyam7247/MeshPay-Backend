@@ -65,6 +65,37 @@ public class BrevoEmailService {
         }
     }
 
+    public void sendAppLockResetOtp(String email, String otp) {
+        if (!isConfigured()) throw new EmailDeliveryUnavailableException();
+        String html="<p>Your MeshPay screen lock reset code is <strong>"+otp+"</strong>.</p>"
+                +"<p>This code expires in 5 minutes and can be used once. If you did not request this, ignore this email.</p>";
+        Map<String,Object> message=Map.of(
+                "sender",Map.of("email",senderEmail,"name",senderName),
+                "to",java.util.List.of(Map.of("email",email)),
+                "subject","MeshPay screen lock reset verification",
+                "htmlContent",html);
+        try {
+            String payload=json.writeValueAsString(message);
+            HttpRequest request=HttpRequest.newBuilder(URI.create("https://api.brevo.com/v3/smtp/email"))
+                    .timeout(Duration.ofSeconds(10)).header("api-key",apiKey)
+                    .header("Accept","application/json").header("Content-Type","application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload,StandardCharsets.UTF_8)).build();
+            HttpResponse<Void> response=http.send(request,HttpResponse.BodyHandlers.discarding());
+            if(response.statusCode()<200||response.statusCode()>=300) {
+                log.warn("Brevo rejected screen lock reset email request (HTTP {}).",response.statusCode());
+                throw new EmailDeliveryUnavailableException();
+            }
+            log.info("Brevo accepted screen lock reset email request (HTTP {}).",response.statusCode());
+        } catch (IOException error) {
+            log.warn("Brevo screen lock reset transport failed ({}).",error.getClass().getSimpleName());
+            throw new EmailDeliveryUnavailableException();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            log.warn("Brevo screen lock reset email request was interrupted.");
+            throw new EmailDeliveryUnavailableException();
+        }
+    }
+
     public void sendBankLinkOtp(String email, String otp) {
         if (!isConfigured()) throw new EmailDeliveryUnavailableException();
         String html = "<p>Your Link bank account verification code is <strong>"+otp+"</strong>.</p>"

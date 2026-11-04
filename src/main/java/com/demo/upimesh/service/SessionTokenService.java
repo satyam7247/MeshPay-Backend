@@ -81,6 +81,22 @@ public class SessionTokenService {
         return Optional.of(session.getUserId());
     }
 
+    public boolean isAppLockVerified(String rawToken) {
+        if (rawToken == null || rawToken.isBlank()) return false;
+        return sessions.findById(hash(rawToken)).map(AppSession::isAppLockVerified).orElse(false);
+    }
+
+    @Transactional
+    public void setAppLockVerified(String rawToken, String userId, boolean verified) {
+        if (rawToken == null || rawToken.isBlank()) throw new IllegalArgumentException("A valid session is required.");
+        AppSession session = sessions.findById(hash(rawToken))
+                .orElseThrow(() -> new IllegalArgumentException("The current session is no longer valid."));
+        if (!session.getUserId().equals(userId) || session.getExpiresAt().isBefore(Instant.now())) {
+            throw new IllegalArgumentException("The current session is no longer valid.");
+        }
+        session.setAppLockVerified(verified);
+    }
+
     public void revoke(String rawToken) {
         if (rawToken != null && !rawToken.isBlank()) sessions.deleteById(hash(rawToken));
     }

@@ -23,6 +23,9 @@ public class AppSession {
     @Column(name = "device_id", length = 64)
     private String deviceId;
 
+    @Column(name = "app_lock_verified", nullable = false, columnDefinition = "boolean default false")
+    private Boolean appLockVerified = Boolean.FALSE;
+
     protected AppSession() {}
 
     public AppSession(String tokenHash, String userId, Instant expiresAt) {
@@ -39,4 +42,6 @@ public class AppSession {
     public String getUserId() { return userId; }
     public Instant getExpiresAt() { return expiresAt; }
     public String getDeviceId() { return deviceId; }
+    public boolean isAppLockVerified() { return Boolean.TRUE.equals(appLockVerified); }
+    public void setAppLockVerified(boolean verified) { this.appLockVerified = verified; }
 }

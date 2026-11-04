@@ -25,6 +25,7 @@ class PrivacyAccountServiceTest {
     private TransactionRepository transactions;
     private PasswordEncoder passwords;
     private com.demo.upimesh.model.AccountDeletionRequestRepository deletionRequests;
+    private AttemptRateLimiter attempts;
     private PrivacyAccountService service;
     private AppUser user;
 
@@ -35,7 +36,8 @@ class PrivacyAccountServiceTest {
         passwords = mock(PasswordEncoder.class);
         deletionRequests = mock(com.demo.upimesh.model.AccountDeletionRequestRepository.class);
         OfflinePaymentPolicy policy = new OfflinePaymentPolicy(users, transactions, deletionRequests);
-        service = new PrivacyAccountService(users, transactions, passwords, policy, deletionRequests);
+        attempts = new AttemptRateLimiter();
+        service = new PrivacyAccountService(users, transactions, passwords, policy, deletionRequests, attempts);
         user = new AppUser("Test User", "test@example.com", "+919876543210", "hashed-password", "test@meshpay");
         ReflectionTestUtils.setField(user, "id", UUID.randomUUID());
         when(users.findById(user.getId())).thenReturn(Optional.of(user));
@@ -95,6 +97,63 @@ class PrivacyAccountServiceTest {
         when(passwords.matches("correct-password", "hashed-password")).thenReturn(true);
         assertDoesNotThrow(() -> service.update(user,
                 new PrivacyAccountService.UpdateRequest(new BigDecimal("100.00"), false, false, "correct-password")));
+    }
+
+    @Test void limitIncreasePasswordChecksAreLimitedByUserAndClientIp() {
+        for(int i=0;i<5;i++) {
+            String clientIp="user-ip-"+i;
+            ResponseStatusException wrong=assertThrows(ResponseStatusException.class,()->service.update(user,
+                    new PrivacyAccountService.UpdateRequest(new BigDecimal("100.00"),false,false,"wrong"),clientIp));
+            assertEquals(401,wrong.getStatusCode().value());
+        }
+        ResponseStatusException userLimited=assertThrows(ResponseStatusException.class,()->service.update(user,
+                new PrivacyAccountService.UpdateRequest(new BigDecimal("100.00"),false,false,"wrong"),"another-ip"));
+        assertEquals(429,userLimited.getStatusCode().value());
+        assertEquals("900",userLimited.getHeaders().getFirst("Retry-After"));
+
+        for(int i=0;i<5;i++) {
+            AppUser distinctUser=new AppUser("Test User","test"+i+"@example.com","+91987654321"+i,
+                    "hashed-password","test"+i+"@meshpay");
+            UUID distinctId=UUID.randomUUID();
+            ReflectionTestUtils.setField(distinctUser,"id",distinctId);
+            when(users.findById(distinctId)).thenReturn(Optional.of(distinctUser));
+            ResponseStatusException wrong=assertThrows(ResponseStatusException.class,()->service.update(distinctUser,
+                    new PrivacyAccountService.UpdateRequest(new BigDecimal("100.00"),false,false,"wrong"),"shared-ip"));
+            assertEquals(401,wrong.getStatusCode().value());
+        }
+        AppUser lastUser=new AppUser("Last User","last@example.com","+919876543219","hashed-password","last@meshpay");
+        UUID lastId=UUID.randomUUID();
+        ReflectionTestUtils.setField(lastUser,"id",lastId);
+        when(users.findById(lastId)).thenReturn(Optional.of(lastUser));
+        ResponseStatusException ipLimited=assertThrows(ResponseStatusException.class,()->service.update(lastUser,
+                new PrivacyAccountService.UpdateRequest(new BigDecimal("100.00"),false,false,"wrong"),"shared-ip"));
+        assertEquals(429,ipLimited.getStatusCode().value());
+    }
+
+    @Test void unlockPasswordChecksAreLimitedByUserAndClientIp() {
+        for(int i=0;i<5;i++) {
+            String clientIp="unlock-ip-"+i;
+            ResponseStatusException wrong=assertThrows(ResponseStatusException.class,()->service.unlock(user,"wrong",clientIp));
+            assertEquals(401,wrong.getStatusCode().value());
+        }
+        ResponseStatusException userLimited=assertThrows(ResponseStatusException.class,()->service.unlock(user,"wrong","another-unlock-ip"));
+        assertEquals(429,userLimited.getStatusCode().value());
+
+        for(int i=0;i<5;i++) {
+            AppUser distinctUser=new AppUser("Unlock User","unlock"+i+"@example.com","+91876543210"+i,
+                    "hashed-password","unlock"+i+"@meshpay");
+            UUID distinctId=UUID.randomUUID();
+            ReflectionTestUtils.setField(distinctUser,"id",distinctId);
+            when(users.findByIdForUpdate(distinctId)).thenReturn(Optional.of(distinctUser));
+            ResponseStatusException wrong=assertThrows(ResponseStatusException.class,()->service.unlock(distinctUser,"wrong","shared-unlock-ip"));
+            assertEquals(401,wrong.getStatusCode().value());
+        }
+        AppUser lastUser=new AppUser("Last Unlock","last-unlock@example.com","+918765432109","hashed-password","last-unlock@meshpay");
+        UUID lastId=UUID.randomUUID();
+        ReflectionTestUtils.setField(lastUser,"id",lastId);
+        when(users.findByIdForUpdate(lastId)).thenReturn(Optional.of(lastUser));
+        ResponseStatusException ipLimited=assertThrows(ResponseStatusException.class,()->service.unlock(lastUser,"wrong","shared-unlock-ip"));
+        assertEquals(429,ipLimited.getStatusCode().value());
     }
 }
 

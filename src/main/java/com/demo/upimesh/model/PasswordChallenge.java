@@ -17,7 +17,7 @@ import java.util.UUID;
         @Index(name="idx_password_challenge_lookup", columnList="email_key, purpose, created_at"),
         @Index(name="idx_password_challenge_expiry", columnList="expires_at")})
 public class PasswordChallenge {
-    public enum Purpose { FORGOT, CHANGE }
+    public enum Purpose { FORGOT, CHANGE, APP_LOCK }
     @Id @GeneratedValue(strategy=GenerationType.UUID)
     private UUID id;
     @Column(name="user_id", length=36)

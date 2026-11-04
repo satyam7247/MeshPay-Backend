@@ -35,10 +35,18 @@ You'll see all three in the dashboard.
 
 ## How to run it
 
+### Profiles and environment
+
+The default `dev` profile uses an in-memory H2 database. Data in H2 is temporary and is cleared when the backend stops. Run `mvnw.cmd spring-boot:run` from this repository. To use MySQL in development, set `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` before starting.
+
+For production, activate `prod` with `SPRING_PROFILES_ACTIVE=prod` (or `--spring.profiles.active=prod`), provide a persistent MySQL `DB_URL` and credentials, and keep `UPI_MESH_DEMO_SEED=false` and `UPI_MESH_DEMO_ENDPOINTS_ENABLED=false`. Production uses `ddl-auto=validate`; apply schema changes through a migration before deploying. Startup is rejected for demo mode or an H2 URL. Configure `APP_SECURITY_TRUSTED_PROXY_ADDRESSES` with only the load balancer's socket IP addresses so client IP rate limits work as intended.
+
+Feature-specific server variables: Twilio OTP delivery needs `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_VERIFY_SERVICE_SID`; Brevo email needs `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, and `BREVO_SENDER_NAME`; Cashfree bank verification needs `BANK_VERIFICATION_PROVIDER=cashfree`, its environment and client credentials, plus `BANK_DATA_ENCRYPTION_KEY`. Keep all credentials in the backend environment or secrets manager. `.env.example` contains placeholders only. `DB_DDL_AUTO` applies to development; production is fixed to `validate`.
+
 ### Prerequisites
 
 - **JDK 17 or newer** installed and on PATH (or `JAVA_HOME` set). Check with `java -version`.
-- No external database server or Maven installation is needed; the wrapper and in-memory H2 database are included.
+- H2 is included for a quick development run. MySQL 8 or newer is optional in development and required in production; configure `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` when using it.
 
 ### Run on Windows
 
@@ -254,7 +262,7 @@ upi-offline-mesh/
 â”œâ”€â”€ README.md                                this file
 â””â”€â”€ src/main/
     â”œâ”€â”€ resources/
-    â”‚   â”œâ”€â”€ application.properties           H2 default (MySQL optional), port 8080, TTLs
+    â”‚   â”œâ”€â”€ application.properties           MySQL datasource, port 8080, TTLs
     â”‚   â””â”€â”€ templates/dashboard.html         The interactive demo UI
     â””â”€â”€ java/com/demo/upimesh/
         â”œâ”€â”€ UpiMeshApplication.java          Spring Boot main class
@@ -429,7 +437,7 @@ This is a teaching demo. To make it production-grade you'd swap these things:
 
 | What's in the demo | What it would be in production |
 |---|---|
-| H2 in-memory default, optional MySQL | Production DB configured through environment variables |
+| MySQL database configured through environment variables | Managed MySQL with backups and production credentials |
 | `ConcurrentHashMap` for idempotency | Redis with `SET NX EX` |
 | RSA keypair regenerated on every startup | Private key in HSM (AWS KMS, HashiCorp Vault). Public key cached on devices. |
 | Server-side `DemoService.createPacket()` | Same code running on Android, in a Kotlin port |

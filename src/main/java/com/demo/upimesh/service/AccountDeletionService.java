@@ -10,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.web.server.ResponseStatusException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -149,7 +150,7 @@ public class AccountDeletionService {
                 .map(this::response).orElse(null);
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean cancelForLogin(UUID userId) {
         AppUser user=users.findByIdForUpdate(userId).orElse(null);
         if(user==null) return false;
