@@ -54,5 +54,8 @@ public class AppSession {
     public boolean isAppLockVerifiedExpired(Instant now, long idleSeconds) {
         return appLockVerifiedAt == null || !appLockVerifiedAt.plusSeconds(idleSeconds).isAfter(now);
     }
+    public boolean shouldRecordAppLockActivity(Instant now, long minimumIntervalSeconds) {
+        return appLockVerifiedAt == null || !appLockVerifiedAt.plusSeconds(minimumIntervalSeconds).isAfter(now);
+    }
     public void recordAppLockActivity(Instant now) { this.appLockVerifiedAt = now; }
 }

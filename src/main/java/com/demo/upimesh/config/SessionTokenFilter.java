@@ -50,8 +50,10 @@ public class SessionTokenFilter extends OncePerRequestFilter {
                     try { return users.findById(java.util.UUID.fromString(id)); }
                     catch (IllegalArgumentException e) { return java.util.Optional.empty(); }
                 });
-                if (user.isPresent() && user.get().isAppLockEnabled() && !tokens.isAppLockVerifiedAndTouch(token)
-                        && !isAppLockExempt(request.getRequestURI())) {
+                String requestPath = request.getRequestURI();
+                boolean appLockExempt = isAppLockExempt(requestPath);
+                if (user.isPresent() && user.get().isAppLockEnabled() && !appLockExempt
+                        && !tokens.isAppLockVerifiedAndTouch(token, requestPath)) {
                     response.setStatus(423);
                     response.setContentType("application/json");
                     response.getWriter().write("{\"code\":\"APP_LOCK_REQUIRED\",\"message\":\"Unlock MeshPay to continue.\"}");

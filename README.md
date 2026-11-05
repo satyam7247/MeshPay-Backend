@@ -39,7 +39,9 @@ You'll see all three in the dashboard.
 
 The default `dev` profile uses an in-memory H2 database. Data in H2 is temporary and is cleared when the backend stops. Run `mvnw.cmd spring-boot:run` from this repository. To use MySQL in development, set `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` before starting.
 
-For production, activate `prod` with `SPRING_PROFILES_ACTIVE=prod` (or `--spring.profiles.active=prod`), provide a persistent MySQL `DB_URL` and credentials, and keep `UPI_MESH_DEMO_SEED=false` and `UPI_MESH_DEMO_ENDPOINTS_ENABLED=false`. Production uses `ddl-auto=validate`; apply schema changes through a migration before deploying. Startup is rejected for demo mode or an H2 URL. Configure `APP_SECURITY_TRUSTED_PROXY_ADDRESSES` with only the load balancer's socket IP addresses so client IP rate limits work as intended.
+For production, activate `prod` with `SPRING_PROFILES_ACTIVE=prod` (or `--spring.profiles.active=prod`), provide a persistent MySQL 8.0.29+ `DB_URL` and credentials, and keep `UPI_MESH_DEMO_SEED=false` and `UPI_MESH_DEMO_ENDPOINTS_ENABLED=false`. Production uses `ddl-auto=validate`; Flyway applies the versioned `db/migration/mysql` migrations before Hibernate validates the schema. Existing pre-Flyway databases are baselined at version 1, then receive the incremental migration. Startup is rejected for demo mode or an H2 URL. Configure `APP_SECURITY_TRUSTED_PROXY_ADDRESSES` with only the load balancer's socket IP addresses so client IP rate limits work as intended.
+
+Development uses the H2 Flyway migrations by default and Hibernate `ddl-auto=update` for iterative development. To use MySQL in dev, set `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD`; if using the MySQL profile location, apply the MySQL migrations. `.env.example` lists every environment placeholder used by `application*.properties`; replace placeholders only for the providers you enable. The required production variables are `SPRING_PROFILES_ACTIVE=prod`, `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, and `APP_SECURITY_TRUSTED_PROXY_ADDRESSES` when deployed behind a load balancer. Provider credentials are required only when that provider is enabled.
 
 Feature-specific server variables: Twilio OTP delivery needs `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_VERIFY_SERVICE_SID`; Brevo email needs `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, and `BREVO_SENDER_NAME`; Cashfree bank verification needs `BANK_VERIFICATION_PROVIDER=cashfree`, its environment and client credentials, plus `BANK_DATA_ENCRYPTION_KEY`. Keep all credentials in the backend environment or secrets manager. `.env.example` contains placeholders only. `DB_DDL_AUTO` applies to development; production is fixed to `validate`.
 
@@ -48,7 +50,7 @@ App Lock sessions expire after five minutes without an authenticated request by 
 ### Prerequisites
 
 - **JDK 17 or newer** installed and on PATH (or `JAVA_HOME` set). Check with `java -version`.
-- H2 is included for a quick development run. MySQL 8 or newer is optional in development and required in production; configure `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` when using it.
+- H2 is included for a quick development run. MySQL 8.0.29 or newer is optional in development and required in production; configure `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` when using it.
 
 ### Run on Windows
 
