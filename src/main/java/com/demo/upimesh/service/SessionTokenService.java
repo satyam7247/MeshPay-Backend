@@ -90,7 +90,7 @@ public class SessionTokenService {
     }
 
     @Transactional
-    public boolean isAppLockVerifiedAndTouch(String rawToken, String requestPath) {
+    public boolean isAppLockVerifiedAndTouch(String rawToken, String requestPath, String requestMethod) {
         if (rawToken == null || rawToken.isBlank()) return false;
         AppSession session = sessions.findById(hash(rawToken)).orElse(null);
         if (session == null || !session.isAppLockVerified()) return false;
@@ -99,15 +99,16 @@ public class SessionTokenService {
             session.setAppLockVerified(false);
             return false;
         }
-        if (!isPollingPath(requestPath) && session.shouldRecordAppLockActivity(now, 30)) {
+        if (!isPollingRequest(requestMethod, requestPath) && session.shouldRecordAppLockActivity(now, 30)) {
             session.recordAppLockActivity(now);
         }
         return true;
     }
 
-    private boolean isPollingPath(String path) {
-        return "/api/privacy-account/sync-status".equals(path)
-                || "/api/notifications/unread-count".equals(path);
+    private boolean isPollingRequest(String method, String path) {
+        return "GET".equalsIgnoreCase(method)
+                && ("/api/privacy-account".equals(path)
+                || "/api/notifications/unread-count".equals(path));
     }
 
     @Transactional

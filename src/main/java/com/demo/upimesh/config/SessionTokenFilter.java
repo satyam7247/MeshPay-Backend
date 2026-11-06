@@ -53,7 +53,7 @@ public class SessionTokenFilter extends OncePerRequestFilter {
                 String requestPath = request.getRequestURI();
                 boolean appLockExempt = isAppLockExempt(requestPath);
                 if (user.isPresent() && user.get().isAppLockEnabled() && !appLockExempt
-                        && !tokens.isAppLockVerifiedAndTouch(token, requestPath)) {
+                        && !tokens.isAppLockVerifiedAndTouch(token, requestPath, request.getMethod())) {
                     response.setStatus(423);
                     response.setContentType("application/json");
                     response.getWriter().write("{\"code\":\"APP_LOCK_REQUIRED\",\"message\":\"Unlock MeshPay to continue.\"}");

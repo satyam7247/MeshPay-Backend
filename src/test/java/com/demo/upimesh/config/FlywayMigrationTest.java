@@ -2,14 +2,46 @@ package com.demo.upimesh.config;
 
 import org.flywaydb.core.Flyway;
 import org.h2.jdbcx.JdbcDataSource;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class FlywayMigrationTest {
+    @Test void flywayLocationIsSelectedFromTheDatasourceVendor() throws Exception {
+        Properties properties = new Properties();
+        try (var input = Files.newInputStream(Path.of("src/main/resources/application.properties"))) {
+            properties.load(input);
+        }
+        assertEquals("classpath:db/migration/{vendor}", properties.getProperty("spring.flyway.locations"));
+        assertTrue(Files.exists(Path.of("src/main/resources/db/migration/h2/V1__legacy_ledger.sql")));
+        assertTrue(Files.exists(Path.of("src/main/resources/db/migration/mysql/V1__legacy_ledger.sql")));
+    }
+
+    @Test void springBootResolvesVendorLocationForAnH2Datasource() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(DataSourceAutoConfiguration.class, FlywayAutoConfiguration.class))
+                .withPropertyValues(
+                        "spring.datasource.url=jdbc:h2:mem:flyway_vendor_location_test;DB_CLOSE_DELAY=-1",
+                        "spring.datasource.driver-class-name=org.h2.Driver",
+                        "spring.datasource.username=sa",
+                        "spring.flyway.locations=classpath:db/migration/{vendor}")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertNotNull(context.getBean(Flyway.class));
+                    assertEquals(4, context.getBean(Flyway.class).info().all().length);
+                });
+    }
+
     @Test void h2MigrationsCreateApplicationSchemaAndStorePurposeAsVarchar() throws Exception {
         JdbcDataSource dataSource = new JdbcDataSource();
         dataSource.setURL("jdbc:h2:mem:flyway_migration_test;DB_CLOSE_DELAY=-1");

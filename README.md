@@ -37,11 +37,11 @@ You'll see all three in the dashboard.
 
 ### Profiles and environment
 
-The default `dev` profile uses an in-memory H2 database. Data in H2 is temporary and is cleared when the backend stops. Run `mvnw.cmd spring-boot:run` from this repository. To use MySQL in development, set `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` before starting.
+The default `dev` profile uses an in-memory H2 database. Data in H2 is temporary and is cleared when the backend stops. Run `mvnw.cmd spring-boot:run` from this repository. To use MySQL in development, set `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` before starting; Flyway selects the matching vendor scripts automatically.
 
 For production, activate `prod` with `SPRING_PROFILES_ACTIVE=prod` (or `--spring.profiles.active=prod`), provide a persistent MySQL 8.0.29+ `DB_URL` and credentials, and keep `UPI_MESH_DEMO_SEED=false` and `UPI_MESH_DEMO_ENDPOINTS_ENABLED=false`. Production uses `ddl-auto=validate`; Flyway applies the versioned `db/migration/mysql` migrations before Hibernate validates the schema. Existing pre-Flyway databases are baselined at version 1, then receive the incremental migration. Startup is rejected for demo mode or an H2 URL. Configure `APP_SECURITY_TRUSTED_PROXY_ADDRESSES` with only the load balancer's socket IP addresses so client IP rate limits work as intended.
 
-Development uses the H2 Flyway migrations by default and Hibernate `ddl-auto=update` for iterative development. To use MySQL in dev, set `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD`; if using the MySQL profile location, apply the MySQL migrations. `.env.example` lists every environment placeholder used by `application*.properties`; replace placeholders only for the providers you enable. The required production variables are `SPRING_PROFILES_ACTIVE=prod`, `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, and `APP_SECURITY_TRUSTED_PROXY_ADDRESSES` when deployed behind a load balancer. Provider credentials are required only when that provider is enabled.
+Development uses Hibernate `ddl-auto=update` and selects Flyway scripts from the active database vendor. The default H2 URL uses `db/migration/h2`; a MySQL `DB_URL` uses `db/migration/mysql`. Set `SPRING_FLYWAY_LOCATIONS` only when you need to override the default `classpath:db/migration/{vendor}`. `.env.example` lists every environment placeholder used by `application*.properties`; replace placeholders only for providers you enable. The required production variables are `SPRING_PROFILES_ACTIVE=prod`, `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD`; set `APP_SECURITY_TRUSTED_PROXY_ADDRESSES` when deployed behind a load balancer. Provider credentials are required only when that provider is enabled.
 
 Feature-specific server variables: Twilio OTP delivery needs `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_VERIFY_SERVICE_SID`; Brevo email needs `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, and `BREVO_SENDER_NAME`; Cashfree bank verification needs `BANK_VERIFICATION_PROVIDER=cashfree`, its environment and client credentials, plus `BANK_DATA_ENCRYPTION_KEY`. Keep all credentials in the backend environment or secrets manager. `.env.example` contains placeholders only. `DB_DDL_AUTO` applies to development; production is fixed to `validate`.
 
@@ -486,3 +486,9 @@ For a college / portfolio project: name the concept honestly as **"mesh-routed d
 ## License
 
 Demo code, no license. Use it however you want for learning.
+
+### Verify MySQL migrations
+
+Docker is unavailable in the current environment, so no MySQL migration test could be run here. The no-Docker migration script and manual validation steps are below. `SPRING_FLYWAY_LOCATIONS` can override the default `classpath:db/migration/{vendor}` when needed.
+
+For the no-Docker path, create an empty MySQL 8.0 schema and a second schema containing the old Hibernate-created tables. Set `MYSQL_PWD` in the environment, then run `scripts/verify-mysql-migrations.ps1 -MySqlHost <host> -MySqlPort <port> -MySqlUser <user> -EmptyDatabase <empty_schema> -BaselineDatabase <legacy_schema>`. Start the app once against each schema with `SPRING_PROFILES_ACTIVE=prod`; startup applies Flyway and Hibernate `ddl-auto=validate` checks the resulting schema.
